@@ -133,6 +133,11 @@ func (m *Model) recomputeRows() {
 	if es := m.entries(secTickets); m.cursor[secTickets] < len(es) {
 		current = es[m.cursor[secTickets]].sel.id
 	}
+	// On the first load, start on the ticket already open in Detail (the
+	// bridge often arrives before the board).
+	if current == "" && m.sel.kind == selTicket {
+		current = m.sel.id
+	}
 	m.rows = rows
 	m.moveCursorTo(secTickets, selection{selTicket, current})
 }
@@ -159,6 +164,7 @@ func (m *Model) applyBridge(s bridge.Snapshot) tea.Cmd {
 	case "ticket":
 		return m.open(selection{selTicket, strings.TrimPrefix(a.ID, "#")}, follow)
 	case "side":
+		m.setTab(secSide)
 		return m.open(selection{selSide, a.ID}, follow)
 	}
 	return nil
@@ -261,10 +267,20 @@ func (m *Model) keyNormal(k tea.KeyMsg) tea.Cmd {
 		m.cycleFocus(1)
 	case "shift+tab", "h", "left":
 		m.cycleFocus(-1)
-	case "1", "2", "3":
-		n, _ := strconv.Atoi(key)
-		m.focus = section(n - 1)
-		m.collapsed[m.focus] = false
+	case "1":
+		m.focus = secDetail
+		m.setCollapsed(secDetail, false)
+	case "2":
+		// focus the list panel; pressing 2 again flips its tab
+		if m.focus != secDetail {
+			m.setTab(otherTab(m.tab))
+		}
+		m.focus = m.tab
+		m.setCollapsed(m.tab, false)
+	case "[", "]":
+		m.setTab(otherTab(m.tab))
+		m.focus = m.tab
+		m.setCollapsed(m.tab, false)
 	case "enter":
 		if e, ok := m.current(); ok {
 			return m.open(e.sel, true)
@@ -278,7 +294,7 @@ func (m *Model) keyNormal(k tea.KeyMsg) tea.Cmd {
 	case "K", "pgup":
 		m.scrollDetail(-3)
 	case "z", " ":
-		m.collapsed[m.focus] = !m.collapsed[m.focus]
+		m.setCollapsed(m.focus, !m.collapsed[m.focus])
 	case "o":
 		if m.focus == secDetail && len(m.detailImages())+len(m.cache.links) > 0 {
 			m.mode = modeOpenPick
@@ -407,8 +423,36 @@ func (m *Model) keyOpenPick(k tea.KeyMsg) tea.Cmd {
 
 // --- movement ---
 
+// cycleFocus walks Detail → Moje tickety → Bez ticketu (tabs count as stops).
 func (m *Model) cycleFocus(d int) {
 	m.focus = section((int(m.focus) + d + int(numSections)) % int(numSections))
+	if m.focus != secDetail {
+		m.tab = m.focus
+	}
+}
+
+// setTab switches panel [2]'s tab; focus moves along if it was on the list.
+func (m *Model) setTab(s section) {
+	m.tab = s
+	if m.focus != secDetail {
+		m.focus = s
+	}
+}
+
+func otherTab(s section) section {
+	if s == secTickets {
+		return secSide
+	}
+	return secTickets
+}
+
+// setCollapsed collapses a panel; both tabs share panel [2]'s state.
+func (m *Model) setCollapsed(s section, v bool) {
+	if s == secDetail {
+		m.collapsed[secDetail] = v
+		return
+	}
+	m.collapsed[secTickets], m.collapsed[secSide] = v, v
 }
 
 func (m *Model) move(d int) {
@@ -513,10 +557,17 @@ func (m *Model) handleMouse(ev tea.MouseMsg) tea.Cmd {
 		if ev.Action != tea.MouseActionPress {
 			return nil
 		}
+		if line == -1 && sec != secDetail {
+			// a click on a tab title selects that tab
+			if t, ok := m.tabAt(ev.X); ok {
+				m.tab, m.focus = t, t
+				return nil
+			}
+		}
 		m.focus = sec
 		if line < 0 || sec == secDetail {
 			if line == -1 {
-				m.collapsed[sec] = !m.collapsed[sec]
+				m.setCollapsed(sec, !m.collapsed[sec])
 			}
 			return nil
 		}

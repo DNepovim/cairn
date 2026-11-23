@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -25,6 +26,10 @@ func testModel(t *testing.T) (Model, *fake.Fake) {
 	dir := t.TempDir()
 	state := `{"active":{"kind":"ticket","id":"681"},"agents":[{"id":"a1","description":"#681 build","status":"running","step":"Edit X.cs"}]}`
 	if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte(state), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	side := `[{"id":"B1","title":"One","status":"s"},{"id":"B2","title":"Two"}]`
+	if err := os.WriteFile(filepath.Join(dir, "side.json"), []byte(side), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	cfg := config.Default()
@@ -142,17 +147,33 @@ func TestFilter_NarrowsLists(t *testing.T) {
 
 func TestSectionKeys_FocusAndCollapse(t *testing.T) {
 	m, _ := testModel(t)
-	m = press(m, "3")
-	if m.focus != secSide {
+	m = press(m, "1")
+	if m.focus != secDetail {
 		t.Fatalf("focus = %v", m.focus)
 	}
-	m = press(m, "z")
-	if !m.collapsed[secSide] {
-		t.Error("z should collapse")
+	m = press(m, "2") // focus the list panel on its current tab
+	if m.focus != secTickets || m.tab != secTickets {
+		t.Fatalf("focus=%v tab=%v", m.focus, m.tab)
 	}
-	m = press(m, "4") // no 4th section any more
-	if m.focus != secSide {
-		t.Errorf("4 moved focus to %v", m.focus)
+	m = press(m, "2") // again: flip the tab
+	if m.focus != secSide || m.tab != secSide {
+		t.Fatalf("2 again: focus=%v tab=%v", m.focus, m.tab)
+	}
+	m = press(m, "[")
+	if m.tab != secTickets {
+		t.Errorf("[ should switch back, tab=%v", m.tab)
+	}
+	m = press(m, "z")
+	if !m.collapsed[secTickets] || !m.collapsed[secSide] {
+		t.Error("z collapses panel [2] for both tabs")
+	}
+	m = press(m, "z", "]", "j")
+	if m.cursor[secSide] != 1 || m.cursor[secTickets] != 0 {
+		t.Errorf("cursor per tab: %v", m.cursor)
+	}
+	m = press(m, "[")
+	if m.cursor[secSide] != 1 {
+		t.Error("tab switch must keep the other tab's cursor")
 	}
 }
 
@@ -218,7 +239,7 @@ func TestView_NeverOverflows(t *testing.T) {
 		m, _ := testModel(t)
 		m = step(m, tea.WindowSizeMsg{Width: w, Height: 45})
 		m = run(m, func() tea.Msg { return bridgeMsg{snap: bridge.Load(m.cfg.BridgeDir)} })
-		for _, keys := range [][]string{{}, {"2", "z"}, {"?"}} {
+		for _, keys := range [][]string{{}, {"2", "z"}, {"]"}, {"?"}} {
 			mm := press(m, keys...)
 			lines := strings.Split(mm.View(), "\n")
 			if len(lines) != 45 {
@@ -232,3 +253,25 @@ func TestView_NeverOverflows(t *testing.T) {
 		}
 	}
 }
+
+func TestTabs_TitleAndBridgeSide(t *testing.T) {
+	m, _ := testModel(t)
+	title, _ := m.sectionTitle(secTickets, 5)
+	if plain := ansiStrip(title); plain != "[2] Moje tickety (2) — Bez ticketu (2)" {
+		t.Errorf("title = %q", plain)
+	}
+	if s, ok := m.tabAt(2 + len("[2] ")); !ok || s != secTickets {
+		t.Errorf("click on first tab = %v %v", s, ok)
+	}
+	if s, ok := m.tabAt(2 + len("[2] ") + lipgloss.Width("Moje tickety (2)") + 3); !ok || s != secSide {
+		t.Errorf("click on second tab = %v %v", s, ok)
+	}
+	snap := bridge.Load(m.cfg.BridgeDir)
+	snap.State.Active = &bridge.Active{Kind: "side", ID: "B1"}
+	m = step(m, bridgeMsg{snap: snap})
+	if m.tab != secSide || m.sel != (selection{selSide, "B1"}) {
+		t.Errorf("side active: tab=%v sel=%+v", m.tab, m.sel)
+	}
+}
+
+func ansiStrip(s string) string { return ansi.Strip(s) }

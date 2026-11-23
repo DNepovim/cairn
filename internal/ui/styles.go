@@ -58,24 +58,28 @@ func chip(label string, bg lipgloss.Color) string {
 	return lipgloss.NewStyle().Background(bg).Foreground(lipgloss.Color("#1c1c1c")).Padding(0, 1).Render(label)
 }
 
-// flowChip renders a workflow state as a coloured chip; idle states stay plain.
+// flowChip renders a workflow state as icon + text in its colour (no
+// background: the list stays calm, the colour carries the meaning).
 func flowChip(f workflow.Flow) string {
+	c := lipgloss.NewStyle()
 	switch f.Kind {
 	case workflow.Agent:
-		return chip(f.Text, lipgloss.Color("#87afd7"))
+		c = c.Foreground(lipgloss.Color("#87afd7"))
 	case workflow.LocalTest:
-		return chip(f.Text, lipgloss.Color("#d7afff"))
+		c = c.Foreground(lipgloss.Color("#d7afff"))
 	case workflow.ReviewMR:
+		c = c.Foreground(lipgloss.Color("#ffd787"))
 		if f.Failed {
-			return chip(f.Text, lipgloss.Color("#ff8787"))
+			c = c.Foreground(lipgloss.Color("#ff8787"))
 		}
-		return chip(f.Text, lipgloss.Color("#ffd787"))
 	case workflow.Deploying:
-		return chip(f.Text, lipgloss.Color("#87d7d7"))
+		c = c.Foreground(lipgloss.Color("#87d7d7"))
 	case workflow.DevTest:
-		return chip(f.Text, lipgloss.Color("#afd787"))
+		c = c.Foreground(lipgloss.Color("#afd787"))
+	default:
+		return sMuted.Render(f.Text)
 	}
-	return sMuted.Render(f.Text)
+	return c.Render(f.Text)
 }
 
 // labelStyle colours a tag by what it means.

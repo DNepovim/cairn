@@ -236,15 +236,15 @@ func (m *Model) naturalHeight(s section) int {
 func (m *Model) layout() [numSections]int {
 	var h [numSections]int
 	avail := m.height - headerHeight - 1 // hint bar
-	for s := section(0); s < numSections; s++ {
+	for _, s := range m.panels() {
 		avail -= panelGap + m.frameHeight(s)
 	}
 	avail = max(0, avail)
 	var need [numSections]int
-	for s := section(0); s < numSections; s++ {
+	for _, s := range m.panels() {
 		need[s] = m.naturalHeight(s)
 	}
-	lists := []section{secTickets, secSide}
+	lists := []section{m.tab}
 	listNeeds := make([]int, len(lists))
 	for i, s := range lists {
 		listNeeds[i] = need[s]
@@ -260,8 +260,12 @@ func (m *Model) layout() [numSections]int {
 		used += got[i]
 	}
 	h[secDetail] = min(need[secDetail], avail-used)
+	h[otherTab(m.tab)] = h[m.tab] // the hidden tab scrolls within the same panel
 	return h
 }
+
+// panels are the visible panels top to bottom: [1] Detail, [2] the active tab.
+func (m *Model) panels() []section { return []section{secDetail, m.tab} }
 
 func (m *Model) bodyHeight(s section) int { return m.layout()[s] }
 
@@ -306,7 +310,7 @@ func (m *Model) hit(y int) (section, int, bool) {
 	}
 	row := headerHeight
 	h := m.layout()
-	for s := section(0); s < numSections; s++ {
+	for _, s := range m.panels() {
 		row += panelGap
 		if y == row {
 			return s, -1, true
@@ -413,7 +417,7 @@ func (m *Model) viewHeader() []string {
 func (m *Model) viewSections() []string {
 	h := m.layout()
 	var out []string
-	for s := section(0); s < numSections; s++ {
+	for _, s := range m.panels() {
 		for i := 0; i < panelGap; i++ {
 			out = append(out, "")
 		}
@@ -471,7 +475,7 @@ func titleBar(title, right string, w int, focused bool) string {
 }
 
 func topBorder(title, right string, w int, l, r string, b lipgloss.Style) string {
-	head := b.Render(l+"─ ") + title + " "
+	head := b.Render(l+"─") + title + " "
 	tail := ""
 	if right != "" {
 		tail = " " + right + " "
@@ -532,33 +536,67 @@ func (m *Model) emptyText(s section) string {
 	return sFaint.Render("Nic.")
 }
 
-// sectionTitle returns the styled title and the right-hand info of a panel.
+// tabPrefix precedes the tab names in panel [2]'s border: "╭─[2] Moje…".
+const (
+	tabPrefix = "[2] "
+	tabSep    = " — "
+)
+
+// tabLabels are the two tab names with their counts.
+func (m *Model) tabLabels() (string, string) {
+	return fmt.Sprintf("%s (%d)", sectionNames[secTickets], len(m.rows)),
+		fmt.Sprintf("%s (%d)", sectionNames[secSide], len(m.snap.Side)+len(m.agentsSide))
+}
+
+// tabAt maps a click column on panel [2]'s border to a tab.
+func (m *Model) tabAt(x int) (section, bool) {
+	l1, l2 := m.tabLabels()
+	start := 2 + lipgloss.Width(tabPrefix) // after "╭─"
+	if x >= start && x < start+lipgloss.Width(l1) {
+		return secTickets, true
+	}
+	start += lipgloss.Width(l1) + lipgloss.Width(tabSep)
+	if x >= start && x < start+lipgloss.Width(l2) {
+		return secSide, true
+	}
+	return 0, false
+}
+
+// sectionTitle returns the styled title and the right-hand info of a panel:
+// "[1] Detail", or "[2] Moje tickety (9) — Bez ticketu (7)" with the active
+// tab highlighted.
 func (m *Model) sectionTitle(s section, bodyH int) (string, string) {
-	arrow := "▾"
-	if m.collapsed[s] {
-		arrow = "▸"
-	}
-	left := fmt.Sprintf("%s %d %s", arrow, int(s)+1, sectionNames[s])
-	var right string
-	switch s {
-	case secDetail:
-		right = m.detailHeaderInfo(bodyH)
-	case secTickets:
-		left += fmt.Sprintf(" (%d)", len(m.rows))
-		if m.filterText != "" {
-			right = "/" + m.filterText
-		}
-	case secSide:
-		left += fmt.Sprintf(" (%d)", len(m.snap.Side)+len(m.agentsSide))
-		if m.filterText != "" {
-			right = "/" + m.filterText
-		}
-	}
 	focused := s == m.focus
+	collapsed := ""
+	if m.collapsed[s] {
+		collapsed = " ▸"
+	}
+	var title, right string
+	if s == secDetail {
+		title = titleStyle(focused).Render("[1] "+sectionNames[secDetail]) + sMuted.Render(collapsed)
+		right = m.detailHeaderInfo(bodyH)
+	} else {
+		l1, l2 := m.tabLabels()
+		active := titleStyle(true) // the active tab is always accent + bold
+		if !focused {
+			active = sText.Bold(true)
+		}
+		inactive := sFaint
+		t1, t2 := inactive.Render(l1), inactive.Render(l2)
+		if m.tab == secTickets {
+			t1 = active.Render(l1)
+		} else {
+			t2 = active.Render(l2)
+		}
+		title = titleStyle(focused).Render(tabPrefix) + t1 + sFaint.Render(tabSep) + t2 + sMuted.Render(collapsed)
+		if m.filterText != "" {
+			right = "/" + m.filterText
+		}
+	}
 	if right != "" {
 		right = titleStyle(focused).UnsetBold().Render(right)
 	}
-	return titleStyle(focused).Render(left), right
+	return title, right
 }
 
 func (m *Model) detailHeaderInfo(bodyH int) string {
@@ -612,17 +650,18 @@ func (m *Model) viewHint() string {
 		return sMuted.Render("libovolná klávesa zavře nápovědu")
 	}
 	if m.focus == secDetail {
-		return renderHints([]hint{{"j/k", "scroll"}, {"^d/^u", "půl str."}, {"o", "otevřít"}, {"c", "koment"}, {"tab", "sekce"}, {"?", "help"}})
+		return renderHints([]hint{{"j/k", "scroll"}, {"^d/^u", "půl str."}, {"o", "otevřít"}, {"c", "koment"}, {"2", "seznam"}, {"?", "help"}})
 	}
-	hs := []hint{{"j/k", "pohyb"}, {"⏎", "detail"}, {"tab", "sekce"}, {"o", "otevřít"}, {"c", "koment"}}
+	hs := []hint{{"j/k", "pohyb"}, {"⏎", "detail"}, {"[ ]", "tab"}, {"o", "otevřít"}, {"c", "koment"}}
 	return renderHints(append(hs, hint{"/", "filtr"}, hint{"?", "help"}))
 }
 
 var helpKeys = []hint{
 	{"j k ↓ ↑", "pohyb v seznamu / scroll detailu"},
 	{"g G", "začátek / konec"},
-	{"tab ⇧tab h l", "další / předchozí sekce"},
-	{"1 2 3", "Detail · Moje tickety · Bez ticketu"},
+	{"1 2", "panel Detail / seznam (2 znovu: přepne tab)"},
+	{"[ ]", "tab Moje tickety ↔ Bez ticketu"},
+	{"tab ⇧tab h l", "Detail → Moje → Bez ticketu → …"},
 	{"⏎ / klik", "otevřít položku v Detailu"},
 	{"^d ^u J K", "scroll Detailu (odkudkoli)"},
 	{"z mezera", "sbalit / rozbalit sekci"},

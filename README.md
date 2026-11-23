@@ -2,14 +2,16 @@
 
 A terminal sidebar for ticket work, built with Go and Bubble Tea. It runs in a
 narrow tmux pane (45–80 columns, about a third of the window) next to Claude
-Code and shows:
+Code. Like lazygit, it is made of numbered, bordered panels: **[1] Detail**,
+and **[2]**, which has two tabs, *Moje tickety* and *Bez ticketu*
+(`╭─[2] Moje tickety (9) — Bez ticketu (7) ─╮`).
 
 1. **Detail**: the selected item. For a ticket that is the title in its own
    colour, labels, assignees, the subagents working on it, related MRs with
    their state and pipeline, then the description and every comment rendered
    as markdown. Images show up as `[obrázek N] (o N: otevřít)`. For a side
    item it shows the title, status, note and URL. Detail scrolls on its own.
-2. **Moje tickety**: open issues assigned to me, each with its workflow state:
+2. **Moje tickety** (tab of [2]): open issues assigned to me, each with its workflow state:
 
    | | meaning |
    |---|---|
@@ -22,7 +24,7 @@ Code and shows:
 
    Active items come first, then by priority, then bugs, then newest. Tags,
    `⚑` priority and subagents (`⎿ current step`) appear under each ticket.
-3. **Bez ticketu**: side items (B1, B2…) and running subagents that have no
+3. **Bez ticketu** (tab of [2]): side items (B1, B2…) and running subagents that have no
    ticket.
 
 Each ticket keeps one colour everywhere (`palette[iid % 10]`, the same rule
@@ -50,11 +52,13 @@ cairn --no-mouse      # keep the terminal's own text selection
 |---|---|
 | `j` `k` / arrows | move in a list, or scroll Detail |
 | `g` `G` | top / bottom |
-| `tab` `shift-tab` `h` `l`, `1`–`3` | switch section |
+| `1` / `2` | focus Detail / the list panel. Pressing `2` again flips its tab |
+| `[` `]` / click a tab title | switch between Moje tickety and Bez ticketu (each tab keeps its own cursor) |
+| `tab` `shift-tab` `h` `l` | cycle Detail → Moje tickety → Bez ticketu |
 | `enter` / click | open the item in Detail |
 | `ctrl-d` `ctrl-u`, `J` `K` | scroll Detail from any section |
-| `z` / `space` | collapse or expand the section |
-| `o` | open in the browser. In Detail with images: `o` then `N` opens image N |
+| `z` / `space` | collapse or expand the panel |
+| `o` | open in the browser. In Detail: `o` then `N` opens image N, or a long URL shown as `↗N` |
 | `y` / `Y` | copy the URL / the ID (pbcopy) |
 | `c` | write a comment. `ctrl-s` asks `y/n`, then it is sent via the tracker. `esc` keeps the draft |
 | `r` | refresh everything |
@@ -147,8 +151,9 @@ less but keeps working.
 ```
 
 - `active` is `{"kind":"ticket"|"side","id":…}` or `null`. When it changes,
-  cairn selects that item and opens it in Detail. This is how talking about
-  #681 in the chat drives the sidebar.
+  cairn opens that item in Detail (a `side` item also switches to the Bez
+  ticketu tab). This is how talking about #681 in the chat drives the sidebar.
+  The list cursor follows too, unless you moved it yourself in the last 10 s.
 - `agents[].tickets` attaches an agent to tickets. An agent named `#688 …` is
   attached by its name as well. Agents with no ticket show under *Bez ticketu*.
 - Unknown fields are ignored.

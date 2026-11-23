@@ -24,7 +24,8 @@ import (
 	"github.com/dominikblaha/cairn/internal/workflow"
 )
 
-// section is one of the stacked panels.
+// section is what can hold focus: the Detail panel, or one of the two tabs
+// of the list panel [2] (lazygit style: "Moje tickety — Bez ticketu").
 type section int
 
 const (
@@ -80,7 +81,8 @@ type Model struct {
 	opts Options
 
 	width, height int
-	focus         section
+	focus         section // secDetail or the active tab
+	tab           section // active tab of panel [2]: secTickets or secSide
 	collapsed     [numSections]bool
 	cursor        [numSections]int
 	offset        [numSections]int // first visible line per section
@@ -157,6 +159,7 @@ func New(cfg config.Config, tr tracker.Tracker, opts Options) Model {
 		tr:      tr,
 		opts:    opts,
 		focus:   secTickets,
+		tab:     secTickets,
 		filter:  fi,
 		comment: ta,
 		images:  map[int]string{},
