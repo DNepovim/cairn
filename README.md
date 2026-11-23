@@ -3,8 +3,16 @@
 A terminal sidebar for ticket work, built with Go and Bubble Tea. It runs in a
 narrow tmux pane (45–80 columns, about a third of the window) next to Claude
 Code. Like lazygit, it is made of numbered, bordered panels: **[1] Detail**,
-and **[2]**, which has two tabs, *Moje tickety* and *Bez ticketu*
-(`╭─[2] Moje tickety (9) — Bez ticketu (7) ─╮`).
+and **[2]**, which has three tabs: *Inbox*, *Moje tickety* and *Bez ticketu*
+(`╭─[2] Inbox (10) — Moje tickety (5/9) — Bez ticketu (3/7) ─╮`). When the
+pane is narrow, the titles shorten to `Inbox 10 · Moje 5/9 · Bez 3/7`.
+
+0. **Inbox** (the default tab, and where `2` lands) is everything waiting on
+   you, in the order of `actions.json`. That includes tickets not assigned to
+   you and lone MRs, which cairn loads through the tracker. Each row shows the
+   icon, the coloured ID and title, and a `👉 action` line. With no fresh
+   `actions.json`, it lists your tickets that need you (in board order), then
+   side items. When it is empty: *Na tebe teď nic nečeká ✓*.
 
 1. **Detail**: the selected item. For a ticket that is the title in its own
    colour, labels, assignees, the subagents working on it, related MRs with
@@ -37,6 +45,10 @@ file is missing or older than 24 h, it falls back to: 🧪, ✅, an MR with a
 The header is two lines: a small cairn, then user, last refresh, running
 agents and the bridge time.
 
+Rows are tinted: each ticket's title line gets a faint background in its own
+colour (side items use yellow). The selected row gets a stronger tint across
+all its lines. Tints adapt to dark and light terminals.
+
 Each ticket keeps one colour everywhere (`palette[iid % 10]`, the same rule
 the Claude Code mod uses in the chat).
 
@@ -62,9 +74,9 @@ cairn --no-mouse      # keep the terminal's own text selection
 |---|---|
 | `j` `k` / arrows | move in a list, or scroll Detail |
 | `g` `G` | top / bottom |
-| `1` / `2` | focus Detail / the list panel. Pressing `2` again flips its tab |
-| `[` `]` / click a tab title | switch between Moje tickety and Bez ticketu (each tab keeps its own cursor) |
-| `tab` `shift-tab` `h` `l` | cycle Detail → Moje tickety → Bez ticketu |
+| `1` / `2` | focus Detail / the Inbox. Pressing `2` again moves to the next tab |
+| `[` `]` / click a tab title | cycle Inbox → Moje tickety → Bez ticketu (each tab keeps its own cursor) |
+| `tab` `shift-tab` `h` `l` | cycle Detail → Inbox → Moje tickety → Bez ticketu |
 | `enter` / click | open the item in Detail |
 | `ctrl-d` `ctrl-u`, `J` `K` | scroll Detail from any section |
 | `z` / `space` | collapse or expand the panel |

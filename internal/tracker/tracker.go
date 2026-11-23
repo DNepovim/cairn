@@ -106,6 +106,12 @@ type ImageFetcher interface {
 	FetchImage(ctx context.Context, img Image) (string, error)
 }
 
+// ChangeFetcher is optionally implemented by adapters that can load one
+// merge/pull request by id (the Inbox shows lone MRs from /actions).
+type ChangeFetcher interface {
+	Change(ctx context.Context, id string) (Change, error)
+}
+
 // ImagePlaceholder is the markdown an adapter puts where image N was.
 func ImagePlaceholder(n int, alt string) string {
 	if alt != "" {

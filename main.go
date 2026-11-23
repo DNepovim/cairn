@@ -14,6 +14,7 @@ import (
 	"os"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/dominikblaha/cairn/internal/adapters"
 	"github.com/dominikblaha/cairn/internal/config"
@@ -73,6 +74,9 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
+	// Ask the terminal for its background now, before Bubble Tea owns stdin
+	// (the answer is cached; row tints adapt to dark/light from it).
+	lipgloss.HasDarkBackground()
 	opts := []tea.ProgramOption{tea.WithAltScreen()}
 	if !*noMouse {
 		opts = append(opts, tea.WithMouseCellMotion())

@@ -30,12 +30,16 @@ type section int
 
 const (
 	secDetail section = iota
+	secInbox          // everything waiting on me
 	secTickets
 	secSide
 	numSections
 )
 
-var sectionNames = [numSections]string{"Detail", "Moje tickety", "Bez ticketu"}
+var sectionNames = [numSections]string{"Detail", "Inbox", "Moje tickety", "Bez ticketu"}
+
+// tabs are the tabs of panel [2], in [ / ] order.
+var tabs = []section{secInbox, secTickets, secSide}
 
 // selKind says what the Detail panel shows.
 type selKind int
@@ -45,11 +49,12 @@ const (
 	selTicket
 	selSide
 	selAgent
+	selChange // a lone MR from the Inbox
 )
 
 type selection struct {
 	kind selKind
-	id   string // ticket id, side id or agent id
+	id   string // ticket id, side id, agent id or MR id
 }
 
 // mode is the input mode; each mode owns the keyboard.
@@ -82,22 +87,27 @@ type Model struct {
 
 	width, height int
 	focus         section // secDetail or the active tab
-	tab           section // active tab of panel [2]: secTickets or secSide
+	tab           section // active tab of panel [2]: one of tabs
 	collapsed     [numSections]bool
 	cursor        [numSections]int
 	offset        [numSections]int // first visible line per section
 	mode          mode
 
 	// tracker data
-	me         tracker.User
-	board      boardData
-	rows       []workflow.Row
-	needs      workflow.Needs // what waits on me (actions.json or heuristics)
-	boardAt    time.Time
-	boardErr   error
-	deployErr  error
-	boardBusy  bool
-	agentsSide []bridge.Agent // running agents without a ticket
+	me    tracker.User
+	board boardData
+	rows  []workflow.Row
+	needs workflow.Needs // what waits on me (actions.json or heuristics)
+	inbox []workflow.InboxItem
+	// Inbox targets outside my list, fetched on demand.
+	extraItems   map[string]tracker.Item
+	extraChanges map[string]tracker.Change
+	extraPending map[string]bool
+	boardAt      time.Time
+	boardErr     error
+	deployErr    error
+	boardBusy    bool
+	agentsSide   []bridge.Agent // running agents without a ticket
 
 	// bridge data
 	snap       bridge.Snapshot
@@ -156,17 +166,21 @@ func New(cfg config.Config, tr tracker.Tracker, opts Options) Model {
 	ta.ShowLineNumbers = false
 	ta.CharLimit = 0
 	m := Model{
-		cfg:     cfg,
-		tr:      tr,
-		opts:    opts,
-		focus:   secTickets,
-		tab:     secTickets,
-		filter:  fi,
-		comment: ta,
-		images:  map[int]string{},
-		cache:   &renderCache{},
-		width:   60,
-		height:  40,
+		cfg:   cfg,
+		tr:    tr,
+		opts:  opts,
+		focus: secInbox,
+		tab:   secInbox,
+
+		extraItems:   map[string]tracker.Item{},
+		extraChanges: map[string]tracker.Change{},
+		extraPending: map[string]bool{},
+		filter:       fi,
+		comment:      ta,
+		images:       map[int]string{},
+		cache:        &renderCache{},
+		width:        60,
+		height:       40,
 	}
 	m.snap = bridge.Load(cfg.BridgeDir)
 	return m
@@ -197,6 +211,13 @@ type imageMsg struct {
 }
 
 type bridgeMsg struct{ snap bridge.Snapshot }
+
+// extraMsg brings an Inbox target that is not in my list.
+type extraMsg struct {
+	key    string // "t:494" or "c:313"
+	item   *tracker.Item
+	change *tracker.Change
+}
 type bridgeReadyMsg struct{ ch <-chan struct{} }
 type boardTickMsg struct{}
 type detailTickMsg struct{}
@@ -330,6 +351,54 @@ func (m Model) fetchImages(sel selection, imgs []tracker.Image) tea.Cmd {
 				return nil
 			}
 			return imageMsg{sel: sel, n: img.N, path: p}
+		})
+	}
+	return tea.Batch(cmds...)
+}
+
+// fetchExtras loads Inbox tickets/MRs that are not among my items.
+func (m *Model) fetchExtras() tea.Cmd {
+	mine := map[string]bool{}
+	for _, r := range m.rows {
+		mine[r.Item.ID] = true
+	}
+	var cmds []tea.Cmd
+	tr := m.tr
+	for _, it := range m.inbox {
+		var key string
+		switch {
+		case it.Kind == workflow.InboxTicket && !mine[it.ID]:
+			if _, ok := m.extraItems[it.ID]; ok {
+				continue
+			}
+			key = "t:" + it.ID
+		case it.Kind == workflow.InboxChange:
+			if _, ok := m.extraChanges[it.ID]; ok {
+				continue
+			}
+			key = "c:" + it.ID
+		default:
+			continue
+		}
+		if m.extraPending[key] {
+			continue
+		}
+		m.extraPending[key] = true
+		id := it.ID
+		cmds = append(cmds, func() tea.Msg {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			msg := extraMsg{key: key}
+			if key[0] == 't' {
+				if d, err := tr.Item(ctx, id); err == nil {
+					msg.item = &d.Item
+				}
+			} else if f, ok := tr.(tracker.ChangeFetcher); ok {
+				if c, err := f.Change(ctx, id); err == nil {
+					msg.change = &c
+				}
+			}
+			return msg
 		})
 	}
 	return tea.Batch(cmds...)

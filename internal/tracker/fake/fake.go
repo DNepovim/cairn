@@ -22,6 +22,8 @@ type Fixtures struct {
 	Details    map[string]tracker.Detail   `json:"details"`
 	Changes    map[string][]tracker.Change `json:"changes"`
 	Deployment tracker.Deployment          `json:"deployment"`
+	// Lone are MRs not related to any item (Inbox demos).
+	Lone []tracker.Change `json:"lone"`
 	// Error, when set, makes every network call fail with it (error-state demos).
 	Error string `json:"error"`
 }
@@ -105,6 +107,23 @@ func (f *Fake) Item(_ context.Context, id string) (tracker.Detail, error) {
 
 func (f *Fake) Changes(_ context.Context, id string) ([]tracker.Change, error) {
 	return f.fx.Changes[id], f.fail()
+}
+
+// Change implements tracker.ChangeFetcher from the fixture's changes.
+func (f *Fake) Change(_ context.Context, id string) (tracker.Change, error) {
+	for _, list := range f.fx.Changes {
+		for _, c := range list {
+			if c.ID == id {
+				return c, nil
+			}
+		}
+	}
+	for _, c := range f.fx.Lone {
+		if c.ID == id {
+			return c, nil
+		}
+	}
+	return tracker.Change{}, fmt.Errorf("MR !%s not found", id)
 }
 
 func (f *Fake) Deployment(context.Context) (tracker.Deployment, error) {

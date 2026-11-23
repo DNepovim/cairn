@@ -42,6 +42,10 @@ func testModel(t *testing.T) (Model, *fake.Fake) {
 		Details: map[string]tracker.Detail{"681": {Item: tracker.Item{ID: "681", Title: "Templates"}, Description: "See #700"}},
 	})
 	m := New(cfg, fx, Options{NoWatch: true, Exec: func(string, ...string) error { return nil }, Now: func() time.Time { return clock }})
+	if m.tab != secInbox || m.focus != secInbox {
+		t.Fatalf("Inbox must be the default tab, got tab=%v focus=%v", m.tab, m.focus)
+	}
+	m.tab, m.focus = secTickets, secTickets // most tests work on Moje tickety
 	m = step(m, tea.WindowSizeMsg{Width: 60, Height: 40})
 	m = run(m, m.fetchBoard())
 	return m, fx
@@ -151,18 +155,23 @@ func TestSectionKeys_FocusAndCollapse(t *testing.T) {
 	if m.focus != secDetail {
 		t.Fatalf("focus = %v", m.focus)
 	}
-	m = press(m, "2") // focus the list panel on its current tab
-	if m.focus != secTickets || m.tab != secTickets {
+	m = press(m, "2") // lands on the Inbox
+	if m.focus != secInbox || m.tab != secInbox {
 		t.Fatalf("focus=%v tab=%v", m.focus, m.tab)
 	}
-	m = press(m, "2") // again: flip the tab
-	if m.focus != secSide || m.tab != secSide {
+	m = press(m, "2") // again: next tab
+	if m.focus != secTickets || m.tab != secTickets {
 		t.Fatalf("2 again: focus=%v tab=%v", m.focus, m.tab)
 	}
-	m = press(m, "[")
-	if m.tab != secTickets {
-		t.Errorf("[ should switch back, tab=%v", m.tab)
+	m = press(m, "]", "]")
+	if m.tab != secInbox {
+		t.Errorf("] cycles back to Inbox, tab=%v", m.tab)
 	}
+	m = press(m, "[")
+	if m.tab != secSide {
+		t.Errorf("[ goes backwards, tab=%v", m.tab)
+	}
+	m = press(m, "[")
 	m = press(m, "z")
 	if !m.collapsed[secTickets] || !m.collapsed[secSide] {
 		t.Error("z collapses panel [2] for both tabs")
@@ -257,13 +266,13 @@ func TestView_NeverOverflows(t *testing.T) {
 func TestTabs_TitleAndBridgeSide(t *testing.T) {
 	m, _ := testModel(t)
 	title, _ := m.sectionTitle(secTickets, 5)
-	if plain := ansiStrip(title); plain != "[2] Moje tickety (0/2) — Bez ticketu (0/2)" {
+	if plain := ansiStrip(title); plain != "[2] Inbox (0) — Moje tickety (0/2) — Bez ticketu (0/2)" {
 		t.Errorf("title = %q", plain)
 	}
-	if s, ok := m.tabAt(2 + len("[2] ")); !ok || s != secTickets {
+	if s, ok := m.tabAt(2 + len("[2] ")); !ok || s != secInbox {
 		t.Errorf("click on first tab = %v %v", s, ok)
 	}
-	if s, ok := m.tabAt(2 + len("[2] ") + lipgloss.Width("Moje tickety (0/2)") + 3); !ok || s != secSide {
+	if s, ok := m.tabAt(2 + len("[2] ") + lipgloss.Width("Inbox (0)") + 3); !ok || s != secTickets {
 		t.Errorf("click on second tab = %v %v", s, ok)
 	}
 	snap := bridge.Load(m.cfg.BridgeDir)
@@ -285,7 +294,7 @@ func TestNeedsMe_MarksRowsAndTitle(t *testing.T) {
 	m.opts.Now = time.Now // the file's mtime is real time
 	m = step(m, bridgeMsg{snap: bridge.Load(m.cfg.BridgeDir)})
 	title, _ := m.sectionTitle(secTickets, 5)
-	if plain := ansiStrip(title); plain != "[2] Moje tickety (1/2) — Bez ticketu (1/2)" {
+	if plain := ansiStrip(title); plain != "[2] Inbox (2) — Moje tickety (1/2) — Bez ticketu (1/2)" {
 		t.Errorf("title = %q", plain)
 	}
 	view := ansiStrip(m.View())
@@ -295,5 +304,68 @@ func TestNeedsMe_MarksRowsAndTitle(t *testing.T) {
 	m = press(m, "]")
 	if !strings.Contains(ansiStrip(m.View()), "👉 🔀 merge !309") {
 		t.Error("side action line missing")
+	}
+}
+
+func TestInboxTab_ActionsOrderStrangersAndEmpty(t *testing.T) {
+	m, fx := testModel(t)
+	_ = fx
+	acts := `[{"id":"B2","icon":"🔀","action":"merge !309"},{"id":"#700","icon":"🧪","action":"otestuj"},{"id":"#555","icon":"❓","action":"rozhodni"}]`
+	if err := os.WriteFile(filepath.Join(m.cfg.BridgeDir, "actions.json"), []byte(acts), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m.opts.Now = time.Now
+	m.tab, m.focus = secInbox, secInbox
+	next, cmd := m.Update(bridgeMsg{snap: bridge.Load(m.cfg.BridgeDir)})
+	m = run(next.(Model), cmd) // also fetches #555 through the tracker
+	es := m.entries(secInbox)
+	if len(es) != 3 || es[0].sel != (selection{selSide, "B2"}) || es[1].sel.id != "700" || es[2].sel.id != "555" {
+		t.Fatalf("inbox = %+v", es)
+	}
+	view := ansiStrip(m.View())
+	for _, want := range []string{"Inbox (3)", "🔀 B2 Two", "👉 merge !309", "🧪 #700 Other", "❓ #555"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("view lacks %q:\n%s", want, view)
+		}
+	}
+	m = press(m, "enter")
+	if m.sel != (selection{selSide, "B2"}) {
+		t.Errorf("enter opens the inbox item, sel=%+v", m.sel)
+	}
+	// An empty, fresh actions.json means nothing waits on me.
+	if err := os.WriteFile(filepath.Join(m.cfg.BridgeDir, "actions.json"), []byte(`[]`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m = step(m, bridgeMsg{snap: bridge.Load(m.cfg.BridgeDir)})
+	if !strings.Contains(ansiStrip(m.View()), "Na tebe teď nic nečeká ✓") {
+		t.Error("empty inbox text missing")
+	}
+}
+
+func TestTabTitles_ShortFormWhenNarrow(t *testing.T) {
+	m, _ := testModel(t)
+	m = step(m, tea.WindowSizeMsg{Width: 45, Height: 45})
+	title, _ := m.sectionTitle(secTickets, 5)
+	if plain := ansiStrip(title); plain != "[2] Inbox 0 · Moje 0/2 · Bez 0/2" {
+		t.Errorf("title = %q", plain)
+	}
+}
+
+func TestRowTint_AdaptsAndStrengthens(t *testing.T) {
+	sub, strong := rowTint("681", false), rowTint("681", true)
+	if sub.Dark == strong.Dark || sub.Light == strong.Light {
+		t.Errorf("selected tint must differ: %+v %+v", sub, strong)
+	}
+	if rgb(sub.Dark)[0]+rgb(sub.Dark)[1]+rgb(sub.Dark)[2] > 3*90 {
+		t.Errorf("dark tint too bright: %s", sub.Dark)
+	}
+	if rgb(sub.Light)[0]+rgb(sub.Light)[1]+rgb(sub.Light)[2] < 3*200 {
+		t.Errorf("light tint too dark: %s", sub.Light)
+	}
+	if rowTint(sideTintKey, false) == rowTint("681", false) {
+		t.Error("side items use their own yellow")
+	}
+	if mix("#ffffff", "#000000", 0.5) != "#808080" {
+		t.Errorf("mix = %s", mix("#ffffff", "#000000", 0.5))
 	}
 }

@@ -74,6 +74,8 @@ func (m *Model) buildDetail(w int) []string {
 			}
 		}
 		return []string{sFaint.Render(m.sel.id + " už v side.json není")}
+	case selChange:
+		return m.buildChange(w)
 	case selAgent:
 		for _, a := range m.snap.State.Agents {
 			if a.ID == m.sel.id {
@@ -196,6 +198,9 @@ func (m *Model) needLines(sel selection, w int) []string {
 	acts := m.needs.Tickets[sel.id]
 	if sel.kind == selSide {
 		acts = m.needs.Side[sel.id]
+	}
+	if it, ok := m.inboxFor(sel); ok && len(it.Actions) > 0 {
+		acts = it.Actions
 	}
 	if len(acts) == 0 {
 		return []string{sNeed.Render("● čeká na tebe")}
@@ -326,6 +331,28 @@ func (m *Model) buildSide(it bridge.SideItem, w int) []string {
 	}
 	if it.URL != "" {
 		out = append(out, "", sFaint.Render("o otevřít · ")+sMuted.Render(it.URL))
+	}
+	return out
+}
+
+// buildChange shows a lone MR from the Inbox.
+func (m *Model) buildChange(w int) []string {
+	out := m.needLines(m.sel, w)
+	c, ok := m.extraChanges[m.sel.id]
+	if !ok {
+		return append(out, sMuted.Render("Načítám !"+m.sel.id+"…"))
+	}
+	out = append(out, wrap(sBold.Render("!"+c.ID+" "+c.Title), w)...)
+	line := mrStateStyle(c.State).Render(c.State)
+	if c.MergeStatus != "" {
+		line += sFaint.Render(" · ") + sMuted.Render(c.MergeStatus)
+	}
+	if c.Pipeline != "" {
+		line += sFaint.Render(" · ") + pipelineStyle(c.Pipeline).Render("● "+c.Pipeline)
+	}
+	out = append(out, line, sFaint.Render(c.Branch))
+	if c.URL != "" {
+		out = append(out, "", sFaint.Render("o otevřít · ")+sMuted.Render(fit(c.URL, w-12)))
 	}
 	return out
 }

@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"hash/fnv"
 	"strconv"
 	"strings"
@@ -39,15 +40,70 @@ var (
 	sNeed    = lipgloss.NewStyle().Foreground(lipgloss.Color("#ffaf00")).Bold(true)
 )
 
-// ticketColor gives every item one colour wherever it is drawn:
-// palette[iid % len] for numeric ids (the mod's rule), a hash otherwise.
-func ticketColor(id string) lipgloss.Color {
+// paletteIndex is the mod's colour rule: iid % len for numeric ids, a hash
+// otherwise.
+func paletteIndex(id string) int {
 	if n, err := strconv.Atoi(id); err == nil && n >= 0 {
-		return ticketPalette[n%len(ticketPalette)]
+		return n % len(ticketPalette)
 	}
 	h := fnv.New32a()
 	h.Write([]byte(id))
-	return ticketPalette[int(h.Sum32()%uint32(len(ticketPalette)))]
+	return int(h.Sum32() % uint32(len(ticketPalette)))
+}
+
+// ticketColor gives every item one colour wherever it is drawn.
+func ticketColor(id string) lipgloss.Color { return ticketPalette[paletteIndex(id)] }
+
+// paletteHex approximates the ANSI palette slots in RGB, as the base for
+// row tints (ANSI slots themselves can't be mixed).
+var paletteHex = []string{"#2aa1b3", "#c061cb", "#33b864", "#4a78f0", "#d0443e", "#c9a227", "#33c7de", "#e07ae8", "#57d98a", "#6f96ff"}
+
+// sideTintKey selects the side items' yellow instead of a ticket colour.
+const sideTintKey = "side"
+
+// rowTint is the background behind a list row in its item's colour: a faint
+// wash for title lines, a stronger one for the selected row. Adaptive, so it
+// stays readable on dark and light terminals.
+func rowTint(key string, strong bool) lipgloss.AdaptiveColor {
+	base := "#c9a227"
+	if key != sideTintKey {
+		base = paletteHex[paletteIndex(key)]
+	}
+	dark, light := 0.20, 0.14
+	if strong {
+		dark, light = 0.40, 0.32
+	}
+	return lipgloss.AdaptiveColor{Dark: mix(base, "#121212", dark), Light: mix(base, "#ffffff", light)}
+}
+
+// mix blends hex colour a into b by t (0 = b, 1 = a).
+func mix(a, b string, t float64) string {
+	pa, pb := rgb(a), rgb(b)
+	var out [3]int
+	for i := range out {
+		out[i] = int(float64(pa[i])*t + float64(pb[i])*(1-t) + 0.5)
+	}
+	return fmt.Sprintf("#%02x%02x%02x", out[0], out[1], out[2])
+}
+
+func rgb(h string) [3]int {
+	var r, g, b int
+	fmt.Sscanf(strings.TrimPrefix(h, "#"), "%02x%02x%02x", &r, &g, &b)
+	return [3]int{r, g, b}
+}
+
+// paint puts a background under an already-styled line, full width, by
+// re-applying it after every reset inside the line.
+func paint(line string, w int, bg lipgloss.TerminalColor) string {
+	probe := lipgloss.NewStyle().Background(bg).Render("x")
+	i := strings.Index(probe, "x")
+	if i <= 0 {
+		return line // no colour support (e.g. tests): leave the line alone
+	}
+	seq := probe[:i]
+	line = fit(line, w)
+	pad := strings.Repeat(" ", max(0, w-lipgloss.Width(line)))
+	return seq + strings.ReplaceAll(line, "\x1b[0m", "\x1b[0m"+seq) + pad + "\x1b[0m"
 }
 
 func ticketStyle(id string) lipgloss.Style {

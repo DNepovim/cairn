@@ -25,6 +25,9 @@ type entry struct {
 	ref  string                            // what "Y" copies
 	text string                            // what the filter matches
 	draw func(w int, cursor bool) []string // rendered lines
+	// tint is the colour key for the row background (ticket id, or
+	// sideTintKey); "" = no tint. The first line is the title line.
+	tint string
 }
 
 func (e entry) render(w int, cursor bool) []string { return e.draw(w, cursor) }
@@ -33,6 +36,10 @@ func (e entry) render(w int, cursor bool) []string { return e.draw(w, cursor) }
 func (m *Model) entries(s section) []entry {
 	var out []entry
 	switch s {
+	case secInbox:
+		for _, it := range m.inbox {
+			out = append(out, m.inboxEntry(it))
+		}
 	case secTickets:
 		for _, r := range m.rows {
 			out = append(out, m.ticketEntry(r))
@@ -83,6 +90,8 @@ func (m *Model) contextURL() string {
 				return it.URL
 			}
 		}
+	case selChange:
+		return m.extraChanges[m.sel.id].URL
 	}
 	return ""
 }
@@ -112,8 +121,109 @@ func (m *Model) prefix(cursor bool, sel selection) string {
 	return c + o + " "
 }
 
+// inboxFor finds sel's Inbox row.
+func (m *Model) inboxFor(sel selection) (workflow.InboxItem, bool) {
+	for _, it := range m.inbox {
+		if inboxSel(it) == sel {
+			return it, true
+		}
+	}
+	return workflow.InboxItem{}, false
+}
+
+func inboxSel(it workflow.InboxItem) selection {
+	switch it.Kind {
+	case workflow.InboxSide:
+		return selection{selSide, it.ID}
+	case workflow.InboxChange:
+		return selection{selChange, it.ID}
+	}
+	return selection{selTicket, it.ID}
+}
+
+// inboxEntry renders an Inbox row: icon, coloured id + title, then the
+// "👉 action" lines.
+func (m *Model) inboxEntry(it workflow.InboxItem) entry {
+	sel := inboxSel(it)
+	icon := it.Icon
+	if icon == "" {
+		icon = "•"
+	}
+	var head, url, ref, text string
+	var hints []string // shown when there is no /actions text
+	switch it.Kind {
+	case workflow.InboxTicket:
+		ref, url = m.tr.Ref(it.ID), m.tr.URL(it.ID)
+		title := "načítám…"
+		for _, r := range m.rows {
+			if r.Item.ID == it.ID {
+				title = r.Item.Title
+				hints = []string{r.Flow.Text}
+			}
+		}
+		if x, ok := m.extraItems[it.ID]; ok {
+			title = x.Title
+		}
+		head = ticketStyle(it.ID).Bold(true).Render(ref + " " + title)
+		text = ref + " " + title
+	case workflow.InboxSide:
+		ref = it.ID
+		title := ""
+		for _, s := range m.snap.Side {
+			if s.ID == it.ID {
+				title, url = s.Title, s.URL
+				hints = []string{s.Status}
+				if it.Icon == "" && s.Icon != "" {
+					icon = s.Icon
+				}
+			}
+		}
+		head = sSide.Render(it.ID) + " " + sText.Bold(true).Render(title)
+		text = it.ID + " " + title
+	case workflow.InboxChange:
+		ref = "!" + it.ID
+		c, ok := m.extraChanges[it.ID]
+		title := "načítám…"
+		if ok {
+			title, url = c.Title, c.URL
+		}
+		head = sBold.Render(ref) + " " + sText.Render(title)
+		text = ref + " " + title
+	}
+	var acts []string
+	for _, a := range it.Actions {
+		acts = append(acts, a.Action)
+	}
+	if len(acts) == 0 {
+		acts = hints
+	}
+	tint := ""
+	switch it.Kind {
+	case workflow.InboxTicket:
+		tint = it.ID
+	case workflow.InboxSide:
+		tint = sideTintKey
+	}
+	return entry{
+		tint: tint,
+		sel:  sel, url: url, ref: ref, text: text + " " + strings.Join(acts, " "),
+		draw: func(w int, cursor bool) []string {
+			lines := []string{m.prefix(cursor, sel) + icon + " " + head}
+			for _, a := range acts {
+				if a != "" {
+					lines = append(lines, "     "+sMuted.Render("👉 "+a))
+				}
+			}
+			return lines
+		},
+	}
+}
+
 // needsMe reports whether an item waits on me.
 func (m *Model) needsMe(sel selection) bool {
+	if _, ok := m.inboxFor(sel); ok {
+		return true
+	}
 	switch sel.kind {
 	case selTicket:
 		_, ok := m.needs.Tickets[sel.id]
@@ -149,10 +259,11 @@ func (m *Model) ticketEntry(r workflow.Row) entry {
 	tags := workflow.Tags(r.Item.Labels, m.cfg.Workflow)
 	pattern := m.tr.IDPattern()
 	return entry{
-		sel: sel, url: r.Item.URL, ref: ref,
+		tint: r.Item.ID,
+		sel:  sel, url: r.Item.URL, ref: ref,
 		text: ref + " " + r.Item.Title + " " + strings.Join(tags, " "),
 		draw: func(w int, cursor bool) []string {
-			st := ticketStyle(r.Item.ID).Bold(cursor || m.sel == sel)
+			st := ticketStyle(r.Item.ID).Bold(true)
 			lines := []string{m.prefix(cursor, sel) + m.needMark(sel) + st.Render(ref+" "+r.Item.Title)}
 			lines = append(lines, actionLines(m.needs.Tickets[r.Item.ID], "     ")...)
 			flow := "   " + flowChip(r.Flow)
@@ -207,9 +318,10 @@ func (m *Model) sideEntry(it bridge.SideItem) entry {
 		icon = "•"
 	}
 	return entry{
-		sel: sel, url: it.URL, ref: it.ID, text: it.ID + " " + it.Title + " " + it.Status,
+		tint: sideTintKey,
+		sel:  sel, url: it.URL, ref: it.ID, text: it.ID + " " + it.Title + " " + it.Status,
 		draw: func(w int, cursor bool) []string {
-			title := icon + " " + sSide.Render(it.ID) + " " + sText.Bold(m.sel == sel).Render(it.Title)
+			title := icon + " " + sSide.Render(it.ID) + " " + sText.Bold(true).Render(it.Title)
 			lines := []string{m.prefix(cursor, sel) + m.needMark(sel) + title}
 			lines = append(lines, actionLines(m.needs.Side[it.ID], "     ")...)
 			if it.Status != "" {
@@ -292,7 +404,9 @@ func (m *Model) layout() [numSections]int {
 		used += got[i]
 	}
 	h[secDetail] = min(need[secDetail], avail-used)
-	h[otherTab(m.tab)] = h[m.tab] // the hidden tab scrolls within the same panel
+	for _, t := range tabs {
+		h[t] = h[m.tab] // hidden tabs scroll within the same panel
+	}
 	return h
 }
 
@@ -539,10 +653,20 @@ func (m *Model) sectionBody(s section) []string {
 	for i, e := range es {
 		cursor := i == m.cursor[s]
 		el := e.render(m.innerWidth(), cursor)
-		if cursor && s == m.focus {
+		selected := cursor && s == m.focus
+		switch {
+		case selected && e.tint != "":
+			// the selected row: a stronger wash over all its lines
+			for j := range el {
+				el[j] = paint(el[j], m.innerWidth(), rowTint(e.tint, true))
+			}
+		case selected:
 			for j := range el {
 				el[j] = highlight(el[j], m.innerWidth())
 			}
+		case e.tint != "":
+			// every other row: a faint wash on the title line only
+			el[0] = paint(el[0], m.innerWidth(), rowTint(e.tint, false))
 		}
 		lines = append(lines, el...)
 	}
@@ -563,6 +687,8 @@ func (m *Model) emptyText(s section) string {
 	switch {
 	case filtered:
 		return sFaint.Render("nic neodpovídá filtru")
+	case s == secInbox:
+		return sOK.Render("Na tebe teď nic nečeká ✓")
 	case s == secTickets && m.boardErr != nil:
 		return sWarn.Render("⚠ board se nepodařilo načíst (r = znovu)")
 	case s == secTickets && m.boardAt.IsZero():
@@ -571,33 +697,40 @@ func (m *Model) emptyText(s section) string {
 	return sFaint.Render("Nic.")
 }
 
-// tabPrefix precedes the tab names in panel [2]'s border: "╭─[2] Moje…".
-const (
-	tabPrefix = "[2] "
-	tabSep    = " — "
-)
+// tabPrefix precedes the tab names in panel [2]'s border: "╭─[2] Inbox…".
+const tabPrefix = "[2] "
 
-// tabLabels are the two tab names with their counts.
-func (m *Model) tabLabels() (string, string) {
-	l1 := fmt.Sprintf("%s (%d/%d)", sectionNames[secTickets], len(m.needs.Tickets), len(m.rows))
-	l2 := fmt.Sprintf("%s (%d/%d)", sectionNames[secSide], len(m.needs.Side), len(m.snap.Side)+len(m.agentsSide))
-	// "╭─" + "[2] " + tabs + " ─╮" plus room for a filter indicator
-	if 2+len(tabPrefix)+lipgloss.Width(l1+tabSep+l2)+4 > m.width {
-		l1 = fmt.Sprintf("Moje (%d/%d)", len(m.needs.Tickets), len(m.rows))
+// tabLabels are the tab names with their counts (in tabs order) and the
+// separator; narrow panes get the short form "Inbox 10 · Moje 5/9 · Bez 3/7".
+func (m *Model) tabLabels() ([]string, string) {
+	inbox, mineN, mineT := len(m.inbox), len(m.needs.Tickets), len(m.rows)
+	sideN, sideT := len(m.needs.Side), len(m.snap.Side)+len(m.agentsSide)
+	long := []string{
+		fmt.Sprintf("Inbox (%d)", inbox),
+		fmt.Sprintf("%s (%d/%d)", sectionNames[secTickets], mineN, mineT),
+		fmt.Sprintf("%s (%d/%d)", sectionNames[secSide], sideN, sideT),
 	}
-	return l1, l2
+	const sep = " — "
+	// "╭─" + "[2] " + tabs + " ─╮" plus room for a filter indicator
+	if 2+len(tabPrefix)+lipgloss.Width(strings.Join(long, sep))+4 <= m.width {
+		return long, sep
+	}
+	return []string{
+		fmt.Sprintf("Inbox %d", inbox),
+		fmt.Sprintf("Moje %d/%d", mineN, mineT),
+		fmt.Sprintf("Bez %d/%d", sideN, sideT),
+	}, " · "
 }
 
 // tabAt maps a click column on panel [2]'s border to a tab.
 func (m *Model) tabAt(x int) (section, bool) {
-	l1, l2 := m.tabLabels()
+	labels, sep := m.tabLabels()
 	start := 2 + lipgloss.Width(tabPrefix) // after "╭─"
-	if x >= start && x < start+lipgloss.Width(l1) {
-		return secTickets, true
-	}
-	start += lipgloss.Width(l1) + lipgloss.Width(tabSep)
-	if x >= start && x < start+lipgloss.Width(l2) {
-		return secSide, true
+	for i, l := range labels {
+		if x >= start && x < start+lipgloss.Width(l) {
+			return tabs[i], true
+		}
+		start += lipgloss.Width(l) + lipgloss.Width(sep)
 	}
 	return 0, false
 }
@@ -616,19 +749,20 @@ func (m *Model) sectionTitle(s section, bodyH int) (string, string) {
 		title = titleStyle(focused).Render("[1] "+sectionNames[secDetail]) + sMuted.Render(collapsed)
 		right = m.detailHeaderInfo(bodyH)
 	} else {
-		l1, l2 := m.tabLabels()
+		labels, sep := m.tabLabels()
 		active := titleStyle(true) // the active tab is always accent + bold
 		if !focused {
 			active = sText.Bold(true)
 		}
-		inactive := sFaint
-		t1, t2 := inactive.Render(l1), inactive.Render(l2)
-		if m.tab == secTickets {
-			t1 = active.Render(l1)
-		} else {
-			t2 = active.Render(l2)
+		parts := make([]string, len(labels))
+		for i, l := range labels {
+			if tabs[i] == m.tab {
+				parts[i] = active.Render(l)
+			} else {
+				parts[i] = sFaint.Render(l)
+			}
 		}
-		title = titleStyle(focused).Render(tabPrefix) + t1 + sFaint.Render(tabSep) + t2 + sMuted.Render(collapsed)
+		title = titleStyle(focused).Render(tabPrefix) + strings.Join(parts, sFaint.Render(sep)) + sMuted.Render(collapsed)
 		if m.filterText != "" {
 			right = "/" + m.filterText
 		}
@@ -646,6 +780,8 @@ func (m *Model) detailHeaderInfo(bodyH int) string {
 		label = m.tr.Ref(m.sel.id)
 	case selSide, selAgent:
 		label = m.sel.id
+	case selChange:
+		label = "!" + m.sel.id
 	}
 	total := len(m.detailLines())
 	if bodyH > 0 && total > bodyH {
@@ -699,9 +835,9 @@ func (m *Model) viewHint() string {
 var helpKeys = []hint{
 	{"j k ↓ ↑", "pohyb v seznamu / scroll detailu"},
 	{"g G", "začátek / konec"},
-	{"1 2", "panel Detail / seznam (2 znovu: přepne tab)"},
-	{"[ ]", "tab Moje tickety ↔ Bez ticketu"},
-	{"tab ⇧tab h l", "Detail → Moje → Bez ticketu → …"},
+	{"1 2", "Detail / Inbox (2 znovu: další tab)"},
+	{"[ ]", "taby Inbox → Moje tickety → Bez ticketu"},
+	{"tab ⇧tab h l", "Detail → Inbox → Moje → Bez → …"},
 	{"⏎ / klik", "otevřít položku v Detailu"},
 	{"^d ^u J K", "scroll Detailu (odkudkoli)"},
 	{"z mezera", "sbalit / rozbalit sekci"},

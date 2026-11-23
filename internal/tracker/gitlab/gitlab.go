@@ -277,28 +277,41 @@ func (g *GitLab) Changes(ctx context.Context, id string) ([]tracker.Change, erro
 	}
 	out := make([]tracker.Change, 0, len(mrs))
 	for _, m := range mrs {
-		c := tracker.Change{
-			ID:          fmt.Sprint(m.IID),
-			Title:       m.Title,
-			State:       m.State,
-			MergeStatus: m.DetailedMergeStatus,
-			Branch:      m.SourceBranch,
-			URL:         m.WebURL,
-			MergeCommit: m.MergeCommitSHA,
-		}
-		if c.MergeCommit == "" {
-			c.MergeCommit = m.SquashCommitSHA
-		}
-		if m.HeadPipeline != nil {
-			c.Pipeline = m.HeadPipeline.Status
-		}
-		if m.MergedAt != nil {
-			c.MergedAt = *m.MergedAt
-		}
-		out = append(out, c)
+		out = append(out, change(m))
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].ID > out[j].ID })
 	return out, nil
+}
+
+// Change implements tracker.ChangeFetcher.
+func (g *GitLab) Change(ctx context.Context, id string) (tracker.Change, error) {
+	var m apiMR
+	if err := g.api(ctx, &m, g.proj()+"/merge_requests/"+id); err != nil {
+		return tracker.Change{}, err
+	}
+	return change(m), nil
+}
+
+func change(m apiMR) tracker.Change {
+	c := tracker.Change{
+		ID:          fmt.Sprint(m.IID),
+		Title:       m.Title,
+		State:       m.State,
+		MergeStatus: m.DetailedMergeStatus,
+		Branch:      m.SourceBranch,
+		URL:         m.WebURL,
+		MergeCommit: m.MergeCommitSHA,
+	}
+	if c.MergeCommit == "" {
+		c.MergeCommit = m.SquashCommitSHA
+	}
+	if m.HeadPipeline != nil {
+		c.Pipeline = m.HeadPipeline.Status
+	}
+	if m.MergedAt != nil {
+		c.MergedAt = *m.MergedAt
+	}
+	return c
 }
 
 // Deployment implements tracker.Tracker: the newest successful pipeline on

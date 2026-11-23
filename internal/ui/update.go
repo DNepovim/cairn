@@ -37,7 +37,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.board = msg.data
 			m.deployErr = msg.dErr
 			m.recomputeRows()
+			cmd = m.fetchExtras()
 		}
+
+	case extraMsg:
+		delete(m.extraPending, msg.key)
+		id := msg.key[2:]
+		if msg.item != nil {
+			m.extraItems[id] = *msg.item
+		}
+		if msg.change != nil {
+			m.extraChanges[id] = *msg.change
+		}
+		m.version++
 
 	case detailMsg:
 		if msg.sel != m.sel {
@@ -64,7 +76,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmd = waitBridge(msg.ch, m.cfg.BridgeDir)
 
 	case bridgeMsg:
-		cmd = m.applyBridge(msg.snap)
+		cmd = tea.Batch(m.applyBridge(msg.snap), m.fetchExtras())
 		if m.bridgeCh != nil {
 			cmd = tea.Batch(cmd, waitBridge(m.bridgeCh, m.cfg.BridgeDir))
 		}
@@ -147,6 +159,14 @@ func (m *Model) recomputeRows() {
 		UseActions: m.snap.ActionsFresh(m.opts.Now()),
 		Ref:        m.tr.Ref,
 	}, m.cfg.Workflow)
+	m.inbox = workflow.Inbox(workflow.NeedsInput{
+		Rows:       rows,
+		Changes:    m.board.changes,
+		Side:       m.snap.Side,
+		Actions:    m.snap.Actions,
+		UseActions: m.snap.ActionsFresh(m.opts.Now()),
+		Ref:        m.tr.Ref,
+	}, m.cfg.Workflow)
 	m.version++ // Detail shows the actions at its top
 	m.moveCursorTo(secTickets, selection{selTicket, current})
 }
@@ -190,12 +210,14 @@ func (m *Model) open(sel selection, moveCursor bool) tea.Cmd {
 		return nil
 	}
 	m.collapsed[secDetail] = false
-	switch {
-	case !moveCursor:
-	case sel.kind == selTicket:
-		m.moveCursorTo(secTickets, sel)
-	case sel.kind == selSide, sel.kind == selAgent:
-		m.moveCursorTo(secSide, sel)
+	if moveCursor {
+		m.moveCursorTo(secInbox, sel)
+		switch sel.kind {
+		case selTicket:
+			m.moveCursorTo(secTickets, sel)
+		case selSide, selAgent:
+			m.moveCursorTo(secSide, sel)
+		}
 	}
 	if sel == m.sel {
 		return m.reloadDetail()
@@ -280,14 +302,20 @@ func (m *Model) keyNormal(k tea.KeyMsg) tea.Cmd {
 		m.focus = secDetail
 		m.setCollapsed(secDetail, false)
 	case "2":
-		// focus the list panel; pressing 2 again flips its tab
-		if m.focus != secDetail {
-			m.setTab(otherTab(m.tab))
+		// lands on the Inbox; pressing 2 again moves to the next tab
+		if m.focus == secDetail {
+			m.tab = secInbox
+		} else {
+			m.tab = nextTab(m.tab, 1)
 		}
 		m.focus = m.tab
 		m.setCollapsed(m.tab, false)
 	case "[", "]":
-		m.setTab(otherTab(m.tab))
+		d := 1
+		if key == "[" {
+			d = -1
+		}
+		m.setTab(nextTab(m.tab, d))
 		m.focus = m.tab
 		m.setCollapsed(m.tab, false)
 	case "enter":
@@ -352,7 +380,7 @@ func (m *Model) keyFilter(k tea.KeyMsg) tea.Cmd {
 	var cmd tea.Cmd
 	m.filter, cmd = m.filter.Update(k)
 	m.filterText = m.filter.Value()
-	for _, s := range []section{secTickets, secSide} {
+	for _, s := range tabs {
 		m.cursor[s], m.offset[s] = 0, 0
 	}
 	return cmd
@@ -362,7 +390,7 @@ func (m *Model) startComment() tea.Cmd {
 	// In "Moje tickety" the comment goes to the ticket under the cursor,
 	// anywhere else to the ticket open in Detail.
 	id := ""
-	if e, ok := m.current(); ok && m.focus == secTickets && e.sel.kind == selTicket {
+	if e, ok := m.current(); ok && (m.focus == secTickets || m.focus == secInbox) && e.sel.kind == selTicket {
 		id = e.sel.id
 	} else if m.sel.kind == selTicket {
 		id = m.sel.id
@@ -448,11 +476,14 @@ func (m *Model) setTab(s section) {
 	}
 }
 
-func otherTab(s section) section {
-	if s == secTickets {
-		return secSide
+// nextTab cycles through panel [2]'s tabs.
+func nextTab(s section, d int) section {
+	for i, t := range tabs {
+		if t == s {
+			return tabs[(i+d+len(tabs))%len(tabs)]
+		}
 	}
-	return secTickets
+	return tabs[0]
 }
 
 // setCollapsed collapses a panel; both tabs share panel [2]'s state.
@@ -461,7 +492,9 @@ func (m *Model) setCollapsed(s section, v bool) {
 		m.collapsed[secDetail] = v
 		return
 	}
-	m.collapsed[secTickets], m.collapsed[secSide] = v, v
+	for _, t := range tabs {
+		m.collapsed[t] = v
+	}
 }
 
 func (m *Model) move(d int) {
