@@ -27,6 +27,16 @@ and **[2]**, which has two tabs, *Moje tickety* and *Bez ticketu*
 3. **Bez ticketu** (tab of [2]): side items (B1, B2…) and running subagents that have no
    ticket.
 
+**Needs me.** The tab titles count what waits on you out of the total, e.g.
+`Moje tickety (3/9) — Bez ticketu (2/8)`. Those rows get a bright `●`, plus a
+dim `👉 …` line with the action, which is also shown at the top of Detail.
+cairn takes this from `actions.json` (see the bridge section below). If that
+file is missing or older than 24 h, it falls back to: 🧪, ✅, an MR with a
+✗ pipeline, a label from `needsMeLabels`, or a side item with `"needsYou": true`.
+
+The header is two lines: a small cairn, then user, last refresh, running
+agents and the bridge time.
+
 Each ticket keeps one colour everywhere (`palette[iid % 10]`, the same rule
 the Claude Code mod uses in the chat).
 
@@ -82,6 +92,7 @@ overrides both. Any field you leave out keeps its default. See
 | `workflow.devTestStages` | columns in which "merged + deployed" means ✅ |
 | `workflow.priorityLabels` | highest first |
 | `workflow.bugLabel`, `epicLabelPrefix`, `hiddenLabelPrefixes` | tag handling |
+| `workflow.needsMeLabels` | fallback "needs me" labels (default `Waiting on developer`) |
 | `workflow.localTestPort` | 🧪 detection (`lsof` + worktree path `wt-<id>` or `/<id>`) |
 | `workflow.deployRef`, `deployJob` | pipelines that deploy to dev |
 | `workflow.repoPath` | local clone for `git merge-base --is-ancestor` |
@@ -159,8 +170,20 @@ less but keeps working.
 - Unknown fields are ignored.
 
 `side.json` is an array of
-`{"id":"B1","icon":"📝","title":"…","status":"…","url":"…","note":"…"}`
-(`note` is markdown).
+`{"id":"B1","icon":"📝","title":"…","status":"…","url":"…","note":"…","needsYou":false}`
+(`note` is markdown, `needsYou` is used only by the fallback).
+
+`actions.json` is written by Claude when it renders `/actions`:
+
+```json
+[{"id": "#688", "icon": "🧪", "action": "① lokálně: export …"},
+ {"id": "B3",   "icon": "🔀", "action": "merge !309"},
+ {"id": "!313", "icon": "🔀", "action": "merge?"}]
+```
+
+An id can be a ticket (`#688`), a side item (`B3`), or an MR (`!313`, which
+marks the ticket whose open MR it is). If the file is older than 24 h, cairn
+ignores it and uses the heuristics.
 
 Write both files atomically (write a `*.tmp` file, then rename it).
 

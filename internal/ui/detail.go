@@ -102,6 +102,7 @@ func (m *Model) buildTicket(w int) []string {
 	}
 	var out []string
 	add := func(lines ...string) { out = append(out, lines...) }
+	add(m.needLines(m.sel, w)...)
 
 	add(wrap(ticketStyle(id).Bold(true).Render(ref+" "+d.Title), w)...)
 
@@ -183,6 +184,25 @@ func (m *Model) buildTicket(w int) []string {
 
 	if refs := m.mentions(d); len(refs) > 0 {
 		add("", sFaint.Render("↳ ")+strings.Join(refs, " "))
+	}
+	return out
+}
+
+// needLines head the Detail of an item that waits on me.
+func (m *Model) needLines(sel selection, w int) []string {
+	if !m.needsMe(sel) {
+		return nil
+	}
+	acts := m.needs.Tickets[sel.id]
+	if sel.kind == selSide {
+		acts = m.needs.Side[sel.id]
+	}
+	if len(acts) == 0 {
+		return []string{sNeed.Render("● čeká na tebe")}
+	}
+	var out []string
+	for _, a := range acts {
+		out = append(out, wrap(sNeed.Render("👉 "+strings.TrimSpace(a.Icon+" "+a.Action)), w)...)
 	}
 	return out
 }
@@ -296,7 +316,7 @@ func (m *Model) buildSide(it bridge.SideItem, w int) []string {
 	if icon == "" {
 		icon = "•"
 	}
-	out := wrap(sSide.Render(it.ID+" "+it.Title), w)
+	out := append(m.needLines(m.sel, w), wrap(sSide.Render(it.ID+" "+it.Title), w)...)
 	if it.Status != "" {
 		out = append(out, wrap(icon+" "+sText.Render(it.Status), w)...)
 	}

@@ -139,6 +139,15 @@ func (m *Model) recomputeRows() {
 		current = m.sel.id
 	}
 	m.rows = rows
+	m.needs = workflow.NeedsMe(workflow.NeedsInput{
+		Rows:       rows,
+		Changes:    m.board.changes,
+		Side:       m.snap.Side,
+		Actions:    m.snap.Actions,
+		UseActions: m.snap.ActionsFresh(m.opts.Now()),
+		Ref:        m.tr.Ref,
+	}, m.cfg.Workflow)
+	m.version++ // Detail shows the actions at its top
 	m.moveCursorTo(secTickets, selection{selTicket, current})
 }
 

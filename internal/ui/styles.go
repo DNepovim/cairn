@@ -36,6 +36,7 @@ var (
 	sAuthor  = lipgloss.NewStyle().Foreground(lipgloss.Color("3")).Bold(true)
 	sTitle   = lipgloss.NewStyle().Foreground(accent).Bold(true)
 	sSelLine = lipgloss.NewStyle().Background(selectBg)
+	sNeed    = lipgloss.NewStyle().Foreground(lipgloss.Color("#ffaf00")).Bold(true)
 )
 
 // ticketColor gives every item one colour wherever it is drawn:
@@ -121,16 +122,14 @@ func mrStateStyle(state string) lipgloss.Style {
 	return sMuted
 }
 
-// cairnArt is the logo: four stacked stones, each line one stone, drawn with
-// half blocks so the tops are rounded. Earth/grey tones, light at the top.
+// cairnArt is the logo: a two-line cairn of half-block stones, a pale
+// pebble on a darker base.
 var cairnArt = []struct {
 	line  string
 	color lipgloss.Color
 }{
-	{"   ▗▄▄▖  ", "#e4ddd0"},
-	{"  ▄████▄ ", "#b8ad9a"},
-	{" ▗▟█████▙▖", "#8f8271"},
-	{"▄████████▙", "#6b5f51"},
+	{" ▗▆▖ ", "#d8d0c0"},
+	{"▟███▙", "#8f8271"},
 }
 
 func renderArt() []string {
@@ -140,5 +139,3 @@ func renderArt() []string {
 	}
 	return out
 }
-
-const artWidth = 10

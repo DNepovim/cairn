@@ -14,9 +14,8 @@ import (
 )
 
 const (
-	headerLines  = 4               // info lines + cairn art inside the header panel
-	headerHeight = headerLines + 2 // plus its border
-	panelGap     = 1               // blank lines before each section panel
+	headerHeight = 2 // borderless: mini cairn + two status lines
+	panelGap     = 1 // blank lines before each section panel
 )
 
 // entry is one selectable item of a list section.
@@ -113,6 +112,37 @@ func (m *Model) prefix(cursor bool, sel selection) string {
 	return c + o + " "
 }
 
+// needsMe reports whether an item waits on me.
+func (m *Model) needsMe(sel selection) bool {
+	switch sel.kind {
+	case selTicket:
+		_, ok := m.needs.Tickets[sel.id]
+		return ok
+	case selSide:
+		_, ok := m.needs.Side[sel.id]
+		return ok
+	}
+	return false
+}
+
+// needMark is the "●" column before an item that waits on me.
+func (m *Model) needMark(sel selection) string {
+	if m.needsMe(sel) {
+		return sNeed.Render("●") + " "
+	}
+	return "  "
+}
+
+// actionLines are the /actions entries for an item: "👉 🧪 ① lokálně: …".
+func actionLines(acts []bridge.Action, indent string) []string {
+	var out []string
+	for _, a := range acts {
+		text := strings.TrimSpace(a.Icon + " " + a.Action)
+		out = append(out, indent+sMuted.Render("👉 "+text))
+	}
+	return out
+}
+
 func (m *Model) ticketEntry(r workflow.Row) entry {
 	sel := selection{selTicket, r.Item.ID}
 	ref := m.tr.Ref(r.Item.ID)
@@ -123,7 +153,8 @@ func (m *Model) ticketEntry(r workflow.Row) entry {
 		text: ref + " " + r.Item.Title + " " + strings.Join(tags, " "),
 		draw: func(w int, cursor bool) []string {
 			st := ticketStyle(r.Item.ID).Bold(cursor || m.sel == sel)
-			lines := []string{m.prefix(cursor, sel) + st.Render(ref+" "+r.Item.Title)}
+			lines := []string{m.prefix(cursor, sel) + m.needMark(sel) + st.Render(ref+" "+r.Item.Title)}
+			lines = append(lines, actionLines(m.needs.Tickets[r.Item.ID], "     ")...)
 			flow := "   " + flowChip(r.Flow)
 			tagLine := renderTags(tags)
 			if tagLine != "" && lipgloss.Width(flow)+2+lipgloss.Width(tagLine) <= w {
@@ -179,7 +210,8 @@ func (m *Model) sideEntry(it bridge.SideItem) entry {
 		sel: sel, url: it.URL, ref: it.ID, text: it.ID + " " + it.Title + " " + it.Status,
 		draw: func(w int, cursor bool) []string {
 			title := icon + " " + sSide.Render(it.ID) + " " + sText.Bold(m.sel == sel).Render(it.Title)
-			lines := []string{m.prefix(cursor, sel) + title}
+			lines := []string{m.prefix(cursor, sel) + m.needMark(sel) + title}
+			lines = append(lines, actionLines(m.needs.Side[it.ID], "     ")...)
 			if it.Status != "" {
 				lines = append(lines, "     "+sMuted.Render(it.Status))
 			}
@@ -193,7 +225,7 @@ func (m *Model) agentEntry(a bridge.Agent) entry {
 	return entry{
 		sel: sel, ref: a.ID, text: a.Description + " " + a.Step,
 		draw: func(w int, cursor bool) []string {
-			lines := []string{m.prefix(cursor, sel) + sOK.Render("🤖 "+a.Description)}
+			lines := []string{m.prefix(cursor, sel) + "  " + sOK.Render("🤖 "+a.Description)}
 			if a.Step != "" {
 				lines = append(lines, "     "+sMuted.Render("⎿ "+a.Step))
 			}
@@ -365,16 +397,19 @@ func fit(s string, w int) string {
 }
 
 func (m *Model) viewHeader() []string {
-	leftW := m.innerWidth() - artWidth - 1
 	project := m.cfg.Tracker.Project
 	if i := strings.LastIndex(project, "/"); i >= 0 {
 		project = project[i+1:]
 	}
-	l1 := sText.Render(project) + sFaint.Render(" · "+m.tr.Name())
-	l2 := sMuted.Render("připojuji…")
+	user := "připojuji…"
 	if m.me.Username != "" {
-		l2 = sMuted.Render("@" + m.me.Username)
+		user = "@" + m.me.Username
 	}
+	l1 := sTitle.Render("cairn") + sFaint.Render(" · "+m.tr.Name())
+	if project != "" {
+		l1 += " " + sText.Render(project)
+	}
+	l1 += sFaint.Render(" · ") + sMuted.Render(user)
 	var l3 string
 	switch {
 	case m.boardErr != nil:
@@ -382,7 +417,7 @@ func (m *Model) viewHeader() []string {
 	case m.boardAt.IsZero():
 		l3 = sMuted.Render("⟳ načítám board…")
 	default:
-		l3 = sMuted.Render("↻ " + m.boardAt.Format("15:04:05"))
+		l3 = sMuted.Render("↻ " + m.boardAt.Format("15:04"))
 		if m.boardBusy {
 			l3 += sMuted.Render(" ⟳")
 		}
@@ -392,6 +427,8 @@ func (m *Model) viewHeader() []string {
 	}
 	var l4 string
 	switch {
+	case m.snap.ActionsErr != nil:
+		l4 = sWarn.Render("⚠ actions.json: " + m.snap.ActionsErr.Error())
 	case m.snap.StateErr != nil:
 		l4 = sWarn.Render("⚠ state.json: " + m.snap.StateErr.Error())
 	case m.snap.Missing:
@@ -406,12 +443,10 @@ func (m *Model) viewHeader() []string {
 		l4 = sMuted.Render(fmt.Sprintf("🤖 %d · bridge %s", running, m.snap.State.UpdatedAt.Local().Format("15:04")))
 	}
 	art := renderArt()
-	body := make([]string, headerLines)
-	for i, l := range []string{l1, l2, l3, l4} {
-		l = fit(l, leftW)
-		body[i] = l + strings.Repeat(" ", max(0, leftW-lipgloss.Width(l))) + " " + art[i]
+	return []string{
+		fit(art[0]+" "+l1, m.width),
+		fit(art[1]+" "+l3+sFaint.Render(" · ")+l4, m.width),
 	}
-	return panel(sTitle.Render("cairn"), "", body, m.width, false)
 }
 
 func (m *Model) viewSections() []string {
@@ -544,8 +579,13 @@ const (
 
 // tabLabels are the two tab names with their counts.
 func (m *Model) tabLabels() (string, string) {
-	return fmt.Sprintf("%s (%d)", sectionNames[secTickets], len(m.rows)),
-		fmt.Sprintf("%s (%d)", sectionNames[secSide], len(m.snap.Side)+len(m.agentsSide))
+	l1 := fmt.Sprintf("%s (%d/%d)", sectionNames[secTickets], len(m.needs.Tickets), len(m.rows))
+	l2 := fmt.Sprintf("%s (%d/%d)", sectionNames[secSide], len(m.needs.Side), len(m.snap.Side)+len(m.agentsSide))
+	// "╭─" + "[2] " + tabs + " ─╮" plus room for a filter indicator
+	if 2+len(tabPrefix)+lipgloss.Width(l1+tabSep+l2)+4 > m.width {
+		l1 = fmt.Sprintf("Moje (%d/%d)", len(m.needs.Tickets), len(m.rows))
+	}
+	return l1, l2
 }
 
 // tabAt maps a click column on panel [2]'s border to a tab.
@@ -683,6 +723,8 @@ var helpLegend = []string{
 	"✅ připraveno k testu na devu",
 	"⏸ nic se neděje, sloupec z boardu",
 	"⚑ priorita · ▶ otevřené v Detailu",
+	"● čeká na tebe (actions.json z /actions,",
+	"   jinak 🧪 ✅ ✗ pipeline / needsMeLabels)",
 }
 
 func (m *Model) viewHelp() []string {

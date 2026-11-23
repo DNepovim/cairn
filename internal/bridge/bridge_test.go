@@ -88,3 +88,34 @@ func TestWatch_SignalsOnWrite(t *testing.T) {
 		t.Fatal("no signal")
 	}
 }
+
+func TestLoad_Actions_FreshAndStale(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now()
+	if Load(dir).ActionsFresh(now) {
+		t.Fatal("no file is not fresh")
+	}
+	write(t, dir, ActionsFile, `[{"id":"#688","icon":"🧪","action":"test"},{"id":"","action":"dropped"}]`)
+	s := Load(dir)
+	if s.ActionsErr != nil || len(s.Actions) != 1 || s.Actions[0].ID != "#688" || !s.ActionsFresh(now) {
+		t.Fatalf("snapshot = %+v", s)
+	}
+	old := now.Add(-25 * time.Hour)
+	if err := os.Chtimes(filepath.Join(dir, ActionsFile), old, old); err != nil {
+		t.Fatal(err)
+	}
+	if Load(dir).ActionsFresh(now) {
+		t.Error("25 h old actions.json must be stale")
+	}
+	write(t, dir, ActionsFile, `[{`)
+	if s := Load(dir); s.ActionsErr == nil || s.ActionsFresh(now) {
+		t.Error("broken actions.json: error, not fresh")
+	}
+}
+
+func TestParseSide_NeedsYou(t *testing.T) {
+	items, err := ParseSide([]byte(`[{"id":"B1","title":"x","needsYou":true}]`))
+	if err != nil || !items[0].NeedsYou {
+		t.Errorf("items = %+v err = %v", items, err)
+	}
+}

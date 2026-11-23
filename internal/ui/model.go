@@ -92,6 +92,7 @@ type Model struct {
 	me         tracker.User
 	board      boardData
 	rows       []workflow.Row
+	needs      workflow.Needs // what waits on me (actions.json or heuristics)
 	boardAt    time.Time
 	boardErr   error
 	deployErr  error

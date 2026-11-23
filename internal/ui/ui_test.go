@@ -101,7 +101,7 @@ func TestBridgeActive_OpensTicketInDetail(t *testing.T) {
 		t.Fatalf("sel = %+v", m.sel)
 	}
 	view := m.View()
-	for _, want := range []string{"#681 Templates", "🤖 pracuje subagent", "⎿ Edit X.cs", "Moje tickety (2)"} {
+	for _, want := range []string{"#681 Templates", "🤖 pracuje subagent", "⎿ Edit X.cs", "Moje tickety (0/2)"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("view lacks %q:\n%s", want, view)
 		}
@@ -257,13 +257,13 @@ func TestView_NeverOverflows(t *testing.T) {
 func TestTabs_TitleAndBridgeSide(t *testing.T) {
 	m, _ := testModel(t)
 	title, _ := m.sectionTitle(secTickets, 5)
-	if plain := ansiStrip(title); plain != "[2] Moje tickety (2) — Bez ticketu (2)" {
+	if plain := ansiStrip(title); plain != "[2] Moje tickety (0/2) — Bez ticketu (0/2)" {
 		t.Errorf("title = %q", plain)
 	}
 	if s, ok := m.tabAt(2 + len("[2] ")); !ok || s != secTickets {
 		t.Errorf("click on first tab = %v %v", s, ok)
 	}
-	if s, ok := m.tabAt(2 + len("[2] ") + lipgloss.Width("Moje tickety (2)") + 3); !ok || s != secSide {
+	if s, ok := m.tabAt(2 + len("[2] ") + lipgloss.Width("Moje tickety (0/2)") + 3); !ok || s != secSide {
 		t.Errorf("click on second tab = %v %v", s, ok)
 	}
 	snap := bridge.Load(m.cfg.BridgeDir)
@@ -275,3 +275,25 @@ func TestTabs_TitleAndBridgeSide(t *testing.T) {
 }
 
 func ansiStrip(s string) string { return ansi.Strip(s) }
+
+func TestNeedsMe_MarksRowsAndTitle(t *testing.T) {
+	m, _ := testModel(t)
+	acts := `[{"id":"#700","icon":"🧪","action":"otestuj lokálně"},{"id":"B2","icon":"🔀","action":"merge !309"}]`
+	if err := os.WriteFile(filepath.Join(m.cfg.BridgeDir, "actions.json"), []byte(acts), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m.opts.Now = time.Now // the file's mtime is real time
+	m = step(m, bridgeMsg{snap: bridge.Load(m.cfg.BridgeDir)})
+	title, _ := m.sectionTitle(secTickets, 5)
+	if plain := ansiStrip(title); plain != "[2] Moje tickety (1/2) — Bez ticketu (1/2)" {
+		t.Errorf("title = %q", plain)
+	}
+	view := ansiStrip(m.View())
+	if !strings.Contains(view, "● #700 Other") || !strings.Contains(view, "👉 🧪 otestuj lokálně") {
+		t.Errorf("row not marked:\n%s", view)
+	}
+	m = press(m, "]")
+	if !strings.Contains(ansiStrip(m.View()), "👉 🔀 merge !309") {
+		t.Error("side action line missing")
+	}
+}

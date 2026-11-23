@@ -58,6 +58,9 @@ type Workflow struct {
 	EpicLabelPrefix string `json:"epicLabelPrefix"`
 	// HiddenLabelPrefixes are never shown as tags ("Environment").
 	HiddenLabelPrefixes []string `json:"hiddenLabelPrefixes"`
+	// NeedsMeLabels mark an item as waiting on me when there is no fresh
+	// actions.json (substring match, like BoardLabels).
+	NeedsMeLabels []string `json:"needsMeLabels"`
 	// LocalTestPort is where the local approval run listens (🧪).
 	LocalTestPort int `json:"localTestPort"`
 	// DeployRef is the branch whose pipelines deploy to the dev environment.
@@ -91,6 +94,7 @@ func Default() Config {
 			BugLabel:            "Bug",
 			EpicLabelPrefix:     "epic-",
 			HiddenLabelPrefixes: []string{"Environment"},
+			NeedsMeLabels:       []string{"Waiting on developer"},
 			LocalTestPort:       5013,
 			DeployRef:           "develop",
 			DeployJob:           "deploy-dev",

@@ -2,7 +2,8 @@
 // cairn through files in ~/.claude/cairn/. cairn never writes there.
 //
 //	state.json  written by the mod: active item, subagents
-//	side.json   written by Claude: work without a ticket (B1, B2…)
+//	side.json     written by Claude: work without a ticket (B1, B2…)
+//	actions.json  written by Claude when it renders /actions: what waits on me
 //
 // Every file may be missing, partial or mid-write; Load never fails, it
 // reports per-file errors and keeps whatever parsed.
@@ -23,6 +24,9 @@ import (
 const (
 	StateFile = "state.json"
 	SideFile  = "side.json"
+	// ActionsFile lists what waits on the user; older than ActionsMaxAge it
+	// is ignored and cairn falls back to its own heuristics.
+	ActionsFile = "actions.json"
 )
 
 // Active is the item the chat is about right now.
@@ -65,6 +69,9 @@ type SideItem struct {
 	Status string `json:"status"`
 	URL    string `json:"url"`
 	Note   string `json:"note"`
+	// NeedsYou marks an item waiting on the user (fallback when there is no
+	// fresh actions.json).
+	NeedsYou bool `json:"needsYou"`
 }
 
 // Snapshot is everything read from the bridge directory at one moment.
@@ -73,7 +80,12 @@ type Snapshot struct {
 	Side     []SideItem
 	StateErr error // nil when state.json is fine or simply missing
 	SideErr  error
-	Missing  bool // state.json does not exist (mod not installed / not running)
+	// Actions from actions.json; ActionsAt is its modification time (zero =
+	// no file). Use ActionsFresh to decide whether to trust it.
+	Actions    []Action
+	ActionsAt  time.Time
+	ActionsErr error
+	Missing    bool // state.json does not exist (mod not installed / not running)
 }
 
 // Load reads the bridge directory. Missing files are not errors.
@@ -87,6 +99,18 @@ func Load(dir string) Snapshot {
 		s.StateErr = err
 	default:
 		s.State, s.StateErr = ParseState(raw)
+	}
+
+	actionsPath := filepath.Join(dir, ActionsFile)
+	if st, err := os.Stat(actionsPath); err == nil {
+		if raw, err := os.ReadFile(actionsPath); err == nil {
+			s.Actions, s.ActionsErr = ParseActions(raw)
+			if s.ActionsErr == nil {
+				s.ActionsAt = st.ModTime()
+			}
+		} else {
+			s.ActionsErr = err
+		}
 	}
 
 	raw, err = os.ReadFile(filepath.Join(dir, SideFile))
@@ -116,6 +140,37 @@ func ParseState(raw []byte) (State, error) {
 		st.Active = nil
 	}
 	return st, nil
+}
+
+// Action is one thing waiting on the user, as /actions lists it.
+type Action struct {
+	ID     string `json:"id"`     // "#688" (ticket), "B3" (side item), "!313" (MR)
+	Icon   string `json:"icon"`   // "🧪", "🔀"…
+	Action string `json:"action"` // "① lokálně: export …"
+}
+
+// ActionsMaxAge is how long actions.json is trusted.
+const ActionsMaxAge = 24 * time.Hour
+
+// ActionsFresh reports whether actions.json exists and is recent enough to
+// replace the heuristics.
+func (s Snapshot) ActionsFresh(now time.Time) bool {
+	return !s.ActionsAt.IsZero() && now.Sub(s.ActionsAt) <= ActionsMaxAge
+}
+
+// ParseActions decodes actions.json, dropping entries without an id.
+func ParseActions(raw []byte) ([]Action, error) {
+	var acts []Action
+	if err := json.Unmarshal(raw, &acts); err != nil {
+		return nil, err
+	}
+	out := acts[:0]
+	for _, a := range acts {
+		if a.ID != "" {
+			out = append(out, a)
+		}
+	}
+	return out, nil
 }
 
 // ParseSide decodes side.json, keeping only entries with an id and a title.
