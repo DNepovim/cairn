@@ -1,0 +1,26 @@
+{
+  "me": {"username": "dominik.blaha", "name": "Dominik Bláha"},
+  "deployment": {"Revision": "", "InProgress": true},
+  "items": [
+    {"ID": "681", "Title": "Šablony smluv: kopie z DigiSign šablon", "State": "opened", "Labels": ["Code review", "Priority: High", "epic-contracts"]},
+    {"ID": "688", "Title": "Report dokument: export do PDF", "State": "opened", "Labels": ["Developing", "Priority: Average", "Bug"]},
+    {"ID": "702", "Title": "Utilisation: přepočet po změně úvazku", "State": "opened", "Labels": ["Ready for testing", "Priority: Low"]},
+    {"ID": "699", "Title": "Faktury: zaokrouhlení DPH", "State": "opened", "Labels": ["Backlog", "Environment: Dev"]}
+  ],
+  "changes": {
+    "681": [{"ID": "540", "State": "opened", "MergeStatus": "mergeable", "Pipeline": "failed", "Branch": "feature/681-template-copies"}],
+    "702": [{"ID": "530", "State": "merged", "MergeCommit": "abc123", "MergedAt": "2026-11-20T10:00:00Z", "Pipeline": "success", "Branch": "feature/702-utilisation"}]
+  },
+  "details": {
+    "681": {
+      "ID": "681", "Title": "Šablony smluv: kopie z DigiSign šablon", "State": "opened",
+      "Labels": ["Code review", "Priority: High", "epic-contracts"],
+      "Assignees": ["dominik.blaha"],
+      "Description": "## Kontext\n\nPři vytvoření smlouvy se má **kopírovat** šablona, ne odkazovat. Souvisí s #688 a #612.\n\n- [ ] kopie šablony\n- [x] env ID pro dev\n\n**[obrázek 1]** _screenshot_ (o 1: otevřít)\n\n```csharp\nvar copy = await DigiSign.CopyTemplate(id);\n```",
+      "Comments": [
+        {"Author": "adela.homolova", "At": "2026-11-21T09:12:00Z", "Body": "Na devu to padá u šablony *NDA*. Můžeš se podívat?"},
+        {"Author": "dominik.blaha", "At": "2026-11-21T11:40:00Z", "Body": "Opraveno v !540, čekám na Cloud Team kvůli env ID."}
+      ]
+    }
+  }
+}

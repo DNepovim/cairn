@@ -1,0 +1,21 @@
+{
+  "tracker": {
+    "type": "gitlab",
+    "host": "git.applifting.cz",
+    "project": "yetanothercorplifting/corplifting"
+  },
+  "workflow": {
+    "boardLabels": ["Waiting on developer", "Developing", "Code review", "Ready for", "Backlog"],
+    "devTestStages": ["Waiting on developer", "Code review", "Developing"],
+    "priorityLabels": ["Priority: Highest", "Priority: High", "Priority: Average", "Priority: Low", "Priority: Lowest"],
+    "bugLabel": "Bug",
+    "epicLabelPrefix": "epic-",
+    "hiddenLabelPrefixes": ["Environment"],
+    "localTestPort": 5013,
+    "deployRef": "develop",
+    "deployJob": "deploy-dev",
+    "repoPath": "~/projects/corplifting/main"
+  },
+  "refresh": { "boardSeconds": 30, "detailSeconds": 60 },
+  "bridgeDir": "~/.claude/cairn"
+}

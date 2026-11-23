@@ -1,9 +1,8 @@
 // Package bridge reads what Claude Code (the ticket-pane mod) shares with
-// cairn through files in ~/.claude/cairn/, and writes cairn's one answer back.
+// cairn through files in ~/.claude/cairn/. cairn never writes there.
 //
-//	state.json        written by the mod: active item, subagents, Notion watch
-//	side.json         written by Claude: work without a ticket (B1, B2…)
-//	notion-read.json  written by cairn when the user marks Notion as read
+//	state.json  written by the mod: active item, subagents
+//	side.json   written by Claude: work without a ticket (B1, B2…)
 //
 // Every file may be missing, partial or mid-write; Load never fails, it
 // reports per-file errors and keeps whatever parsed.
@@ -22,9 +21,8 @@ import (
 
 // File names inside the bridge directory.
 const (
-	StateFile      = "state.json"
-	SideFile       = "side.json"
-	NotionReadFile = "notion-read.json"
+	StateFile = "state.json"
+	SideFile  = "side.json"
 )
 
 // Active is the item the chat is about right now.
@@ -51,29 +49,12 @@ func (a Agent) Done() bool {
 	return false
 }
 
-// NotionItem is one watched Notion page.
-type NotionItem struct {
-	URL      string `json:"url"`
-	Title    string `json:"title"`
-	Status   string `json:"status"`
-	Assigned bool   `json:"assigned"`
-	Others   int    `json:"others"`  // comments by other people
-	Changed  bool   `json:"changed"` // changed since the user last marked them read
-}
-
-// Notion is the mod's Notion watch.
-type Notion struct {
-	FetchedAt string       `json:"fetchedAt"`
-	Error     string       `json:"error"`
-	Items     []NotionItem `json:"items"`
-}
-
 // State is state.json.
 type State struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 	Active    *Active   `json:"active"`
 	Agents    []Agent   `json:"agents"`
-	Notion    Notion    `json:"notion"`
+	// Unknown fields (e.g. an old "notion" block) are ignored.
 }
 
 // SideItem is one entry of side.json.
@@ -90,8 +71,7 @@ type SideItem struct {
 type Snapshot struct {
 	State    State
 	Side     []SideItem
-	ReadAt   time.Time // last notion-read.json
-	StateErr error     // nil when state.json is fine or simply missing
+	StateErr error // nil when state.json is fine or simply missing
 	SideErr  error
 	Missing  bool // state.json does not exist (mod not installed / not running)
 }
@@ -114,15 +94,6 @@ func Load(dir string) Snapshot {
 		s.Side, s.SideErr = ParseSide(raw)
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		s.SideErr = err
-	}
-
-	if raw, err := os.ReadFile(filepath.Join(dir, NotionReadFile)); err == nil {
-		var r struct {
-			ReadAt time.Time `json:"readAt"`
-		}
-		if json.Unmarshal(raw, &r) == nil {
-			s.ReadAt = r.ReadAt
-		}
 	}
 	return s
 }
@@ -162,28 +133,6 @@ func ParseSide(raw []byte) ([]SideItem, error) {
 	return out, nil
 }
 
-// MarkNotionRead writes notion-read.json (atomically, so the mod never sees half a file).
-func MarkNotionRead(dir string, at time.Time) error {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	raw, _ := json.Marshal(map[string]string{"readAt": at.UTC().Format(time.RFC3339)})
-	tmp := filepath.Join(dir, NotionReadFile+".tmp")
-	if err := os.WriteFile(tmp, raw, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, filepath.Join(dir, NotionReadFile))
-}
-
-// NotionChanged reports whether an item still counts as unread, honouring a
-// local mark-read newer than the state file (until the mod catches up).
-func NotionChanged(s Snapshot, it NotionItem) bool {
-	if !it.Changed {
-		return false
-	}
-	return s.ReadAt.IsZero() || !s.ReadAt.After(s.State.UpdatedAt)
-}
-
 // Watch notifies on changes in dir (created if missing). Bursts of events are
 // coalesced into one signal after a short quiet period. Call stop to end it.
 func Watch(dir string) (changes <-chan struct{}, stop func(), err error) {
@@ -212,8 +161,8 @@ func Watch(dir string) (changes <-chan struct{}, stop func(), err error) {
 				if !ok {
 					return
 				}
-				if filepath.Ext(ev.Name) == ".tmp" || filepath.Base(ev.Name) == NotionReadFile {
-					continue // our own writes and half-written files
+				if filepath.Ext(ev.Name) == ".tmp" {
+					continue // half-written files of an atomic write
 				}
 				if timer != nil {
 					timer.Stop()

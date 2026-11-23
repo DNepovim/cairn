@@ -1,0 +1,617 @@
+package ui
+
+import (
+	"fmt"
+	"regexp"
+	"strings"
+
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
+
+	"github.com/dominikblaha/cairn/internal/bridge"
+	"github.com/dominikblaha/cairn/internal/tracker"
+	"github.com/dominikblaha/cairn/internal/workflow"
+)
+
+const headerHeight = 4 // title block + cairn art
+
+// entry is one selectable item of a list section.
+type entry struct {
+	sel  selection
+	url  string
+	ref  string                            // what "Y" copies
+	text string                            // what the filter matches
+	draw func(w int, cursor bool) []string // rendered lines
+}
+
+func (e entry) render(w int, cursor bool) []string { return e.draw(w, cursor) }
+
+// entries builds the visible (filtered) entries of a list section.
+func (m *Model) entries(s section) []entry {
+	var out []entry
+	switch s {
+	case secTickets:
+		for _, r := range m.rows {
+			out = append(out, m.ticketEntry(r))
+		}
+	case secSide:
+		for _, it := range m.snap.Side {
+			out = append(out, m.sideEntry(it))
+		}
+		for _, a := range m.agentsSide {
+			out = append(out, m.agentEntry(a))
+		}
+	}
+	if q := strings.ToLower(strings.TrimSpace(m.filterText)); q != "" {
+		kept := out[:0]
+		for _, e := range out {
+			if strings.Contains(strings.ToLower(e.text), q) {
+				kept = append(kept, e)
+			}
+		}
+		out = kept
+	}
+	return out
+}
+
+// current returns the entry under the cursor of the focused list.
+func (m *Model) current() (entry, bool) {
+	if m.focus == secDetail {
+		return entry{}, false
+	}
+	es := m.entries(m.focus)
+	if c := m.cursor[m.focus]; c < len(es) {
+		return es[c], true
+	}
+	return entry{}, false
+}
+
+// contextURL is what "o"/"y" act on: the focused list item, or the Detail item.
+func (m *Model) contextURL() string {
+	if e, ok := m.current(); ok {
+		return e.url
+	}
+	switch m.sel.kind {
+	case selTicket:
+		return m.tr.URL(m.sel.id)
+	case selSide:
+		for _, it := range m.snap.Side {
+			if it.ID == m.sel.id {
+				return it.URL
+			}
+		}
+	}
+	return ""
+}
+
+func (m *Model) contextRef() string {
+	if e, ok := m.current(); ok {
+		return e.ref
+	}
+	switch m.sel.kind {
+	case selTicket:
+		return m.tr.Ref(m.sel.id)
+	case selSide, selAgent:
+		return m.sel.id
+	}
+	return ""
+}
+
+// prefix draws the two marker columns: cursor bar and "open in Detail".
+func (m *Model) prefix(cursor bool, sel selection) string {
+	c, o := " ", " "
+	if cursor {
+		c = sKey.Render("▌")
+	}
+	if m.sel == sel {
+		o = sKey.Render("▶")
+	}
+	return c + o + " "
+}
+
+func (m *Model) ticketEntry(r workflow.Row) entry {
+	sel := selection{selTicket, r.Item.ID}
+	ref := m.tr.Ref(r.Item.ID)
+	tags := workflow.Tags(r.Item.Labels, m.cfg.Workflow)
+	pattern := m.tr.IDPattern()
+	return entry{
+		sel: sel, url: r.Item.URL, ref: ref,
+		text: ref + " " + r.Item.Title + " " + strings.Join(tags, " "),
+		draw: func(w int, cursor bool) []string {
+			st := ticketStyle(r.Item.ID).Bold(cursor || m.sel == sel)
+			lines := []string{m.prefix(cursor, sel) + st.Render(ref+" "+r.Item.Title)}
+			flow := "   " + flowChip(r.Flow)
+			tagLine := renderTags(tags)
+			if tagLine != "" && lipgloss.Width(flow)+2+lipgloss.Width(tagLine) <= w {
+				lines = append(lines, flow+"  "+tagLine)
+			} else {
+				lines = append(lines, flow)
+				if tagLine != "" {
+					lines = append(lines, "   "+tagLine)
+				}
+			}
+			for _, a := range r.Agents {
+				lines = append(lines, agentLines(a, r.Item.ID, pattern, "     ")...)
+			}
+			return lines
+		},
+	}
+}
+
+func renderTags(tags []string) string {
+	parts := make([]string, len(tags))
+	for i, t := range tags {
+		parts[i] = labelStyle(t).Render(t)
+	}
+	return strings.Join(parts, sFaint.Render(" · "))
+}
+
+// agentLines draws a subagent under its ticket: icon + name, and its step
+// while it runs.
+func agentLines(a bridge.Agent, id string, pattern *regexp.Regexp, indent string) []string {
+	name := tracker.StripLeadingRef(a.Description, pattern)
+	icon := "🤖"
+	st := ticketStyle(id)
+	switch {
+	case a.Status == "failed":
+		icon, st = "✗", sWarn
+	case a.Done():
+		icon, st = "✓", sFaint
+	}
+	lines := []string{indent + st.Render(icon+" "+name)}
+	if !a.Done() && a.Step != "" {
+		lines = append(lines, indent+sMuted.Render("   ⎿ "+a.Step))
+	}
+	return lines
+}
+
+func (m *Model) sideEntry(it bridge.SideItem) entry {
+	sel := selection{selSide, it.ID}
+	icon := it.Icon
+	if icon == "" {
+		icon = "•"
+	}
+	return entry{
+		sel: sel, url: it.URL, ref: it.ID, text: it.ID + " " + it.Title + " " + it.Status,
+		draw: func(w int, cursor bool) []string {
+			title := icon + " " + sSide.Render(it.ID) + " " + sText.Bold(m.sel == sel).Render(it.Title)
+			lines := []string{m.prefix(cursor, sel) + title}
+			if it.Status != "" {
+				lines = append(lines, "     "+sMuted.Render(it.Status))
+			}
+			return lines
+		},
+	}
+}
+
+func (m *Model) agentEntry(a bridge.Agent) entry {
+	sel := selection{selAgent, a.ID}
+	return entry{
+		sel: sel, ref: a.ID, text: a.Description + " " + a.Step,
+		draw: func(w int, cursor bool) []string {
+			lines := []string{m.prefix(cursor, sel) + sOK.Render("🤖 "+a.Description)}
+			if a.Step != "" {
+				lines = append(lines, "     "+sMuted.Render("⎿ "+a.Step))
+			}
+			return lines
+		},
+	}
+}
+
+// --- layout ---
+
+func (m *Model) innerWidth() int { return max(10, m.width-2) }
+
+// naturalHeight is how many body lines a section wants.
+func (m *Model) naturalHeight(s section) int {
+	if m.collapsed[s] {
+		return 0
+	}
+	if s == secDetail {
+		return max(1, len(m.detailLines()))
+	}
+	n := 0
+	for i, e := range m.entries(s) {
+		n += len(e.render(m.innerWidth(), i == m.cursor[s]))
+	}
+	return max(1, n)
+}
+
+// layout splits the rows between the section bodies: Detail gets up to ~55%,
+// the lists share the rest by water-filling (small lists get all they need,
+// the leftover goes to the big ones), and Detail takes whatever is left.
+func (m *Model) layout() [numSections]int {
+	var h [numSections]int
+	avail := max(0, m.height-headerHeight-1-int(numSections))
+	var need [numSections]int
+	for s := section(0); s < numSections; s++ {
+		need[s] = m.naturalHeight(s)
+	}
+	lists := []section{secTickets, secSide}
+	listNeeds := make([]int, len(lists))
+	for i, s := range lists {
+		listNeeds[i] = need[s]
+	}
+	target := 0
+	if need[secDetail] > 0 {
+		target = min(need[secDetail], avail*55/100)
+	}
+	got := waterfill(avail-target, listNeeds)
+	used := 0
+	for i, s := range lists {
+		h[s] = got[i]
+		used += got[i]
+	}
+	h[secDetail] = min(need[secDetail], avail-used)
+	return h
+}
+
+func (m *Model) bodyHeight(s section) int { return m.layout()[s] }
+
+// waterfill gives each need at most a fair share of avail, redistributing
+// what small needs leave unused.
+func waterfill(avail int, needs []int) []int {
+	out := make([]int, len(needs))
+	left := avail
+	remaining := 0
+	for _, n := range needs {
+		if n > 0 {
+			remaining++
+		}
+	}
+	for remaining > 0 && left > 0 {
+		share := max(1, left/remaining)
+		progressed := false
+		for i, n := range needs {
+			if out[i] >= n || left == 0 {
+				continue
+			}
+			give := min(share, n-out[i], left)
+			out[i] += give
+			left -= give
+			progressed = true
+			if out[i] >= n {
+				remaining--
+			}
+		}
+		if !progressed {
+			break
+		}
+	}
+	return out
+}
+
+// hit maps a screen row to (section, body line); line -1 is the section header.
+func (m *Model) hit(y int) (section, int, bool) {
+	if m.mode != modeNormal {
+		return 0, 0, false
+	}
+	row := headerHeight
+	h := m.layout()
+	for s := section(0); s < numSections; s++ {
+		if y == row {
+			return s, -1, true
+		}
+		row++
+		if y < row+h[s] {
+			return s, y - row, true
+		}
+		row += h[s]
+	}
+	return 0, 0, false
+}
+
+// --- View ---
+
+// View renders the whole screen, exactly m.height lines.
+func (m Model) View() string {
+	if m.width < 20 || m.height < 10 {
+		return "cairn: okno je moc malé"
+	}
+	lines := m.viewHeader()
+	switch m.mode {
+	case modeHelp:
+		lines = append(lines, m.viewHelp()...)
+	case modeComment, modeConfirm:
+		lines = append(lines, m.viewComment()...)
+	default:
+		lines = append(lines, m.viewSections()...)
+	}
+	for len(lines) < m.height-1 {
+		lines = append(lines, "")
+	}
+	lines = append(lines[:m.height-1], m.viewHint())
+	for i, l := range lines {
+		lines[i] = fit(l, m.width)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func fit(s string, w int) string {
+	if lipgloss.Width(s) <= w {
+		return s
+	}
+	return ansi.Truncate(s, w, "…")
+}
+
+func (m *Model) viewHeader() []string {
+	leftW := m.width - artWidth - 1
+	project := m.cfg.Tracker.Project
+	if i := strings.LastIndex(project, "/"); i >= 0 {
+		project = project[i+1:]
+	}
+	l1 := sTitle.Render("cairn") + sFaint.Render(" · "+m.tr.Name()+" "+project)
+	l2 := sMuted.Render("připojuji…")
+	if m.me.Username != "" {
+		l2 = sMuted.Render("@" + m.me.Username)
+	}
+	var l3 string
+	switch {
+	case m.boardErr != nil:
+		l3 = sWarn.Render("⚠ " + m.boardErr.Error())
+	case m.boardAt.IsZero():
+		l3 = sMuted.Render("⟳ načítám board…")
+	default:
+		l3 = sMuted.Render("↻ " + m.boardAt.Format("15:04:05"))
+		if m.boardBusy {
+			l3 += sMuted.Render(" ⟳")
+		}
+		if m.deployErr != nil {
+			l3 += sWarn.Render("  ⚠ deploy: " + m.deployErr.Error())
+		}
+	}
+	var l4 string
+	switch {
+	case m.snap.StateErr != nil:
+		l4 = sWarn.Render("⚠ state.json: " + m.snap.StateErr.Error())
+	case m.snap.Missing:
+		l4 = sFaint.Render("bridge: čekám na Claude Code")
+	default:
+		running := 0
+		for _, a := range m.snap.State.Agents {
+			if !a.Done() {
+				running++
+			}
+		}
+		l4 = sMuted.Render(fmt.Sprintf("🤖 %d · bridge %s", running, m.snap.State.UpdatedAt.Local().Format("15:04")))
+	}
+	art := renderArt()
+	out := make([]string, headerHeight)
+	for i, l := range []string{l1, l2, l3, l4} {
+		l = fit(l, leftW)
+		out[i] = l + strings.Repeat(" ", max(0, leftW-lipgloss.Width(l))) + " " + art[i]
+	}
+	return out
+}
+
+func (m *Model) viewSections() []string {
+	h := m.layout()
+	var out []string
+	for s := section(0); s < numSections; s++ {
+		out = append(out, m.sectionHeader(s, h[s]))
+		if h[s] == 0 {
+			continue
+		}
+		body := m.sectionBody(s)
+		start := min(m.offset[s], max(0, len(body)-h[s]))
+		gutter := "  "
+		if s == m.focus {
+			gutter = sGutterFocus.Render("▎") + " "
+		}
+		for i := 0; i < h[s]; i++ {
+			line := ""
+			if start+i < len(body) {
+				line = body[start+i]
+			}
+			out = append(out, gutter+fit(line, m.innerWidth()))
+		}
+	}
+	return out
+}
+
+// sectionBody returns all lines of a section (scrolling happens in viewSections).
+func (m *Model) sectionBody(s section) []string {
+	if s == secDetail {
+		return m.detailLines()
+	}
+	es := m.entries(s)
+	if len(es) == 0 {
+		return []string{m.emptyText(s)}
+	}
+	var lines []string
+	for i, e := range es {
+		cursor := i == m.cursor[s]
+		el := e.render(m.innerWidth(), cursor)
+		if cursor && s == m.focus {
+			for j := range el {
+				el[j] = highlight(el[j], m.innerWidth())
+			}
+		}
+		lines = append(lines, el...)
+	}
+	return lines
+}
+
+// highlight paints a selection background under an already-styled line by
+// re-applying it after every reset.
+func highlight(line string, w int) string {
+	const bg = "\x1b[48;5;237m"
+	line = fit(line, w)
+	pad := strings.Repeat(" ", max(0, w-lipgloss.Width(line)))
+	return bg + strings.ReplaceAll(line, "\x1b[0m", "\x1b[0m"+bg) + pad + "\x1b[0m"
+}
+
+func (m *Model) emptyText(s section) string {
+	filtered := m.filterText != ""
+	switch {
+	case filtered:
+		return sFaint.Render("nic neodpovídá filtru")
+	case s == secTickets && m.boardErr != nil:
+		return sWarn.Render("⚠ board se nepodařilo načíst (r = znovu)")
+	case s == secTickets && m.boardAt.IsZero():
+		return sFaint.Render("Načítám…")
+	}
+	return sFaint.Render("Nic.")
+}
+
+func (m *Model) sectionHeader(s section, bodyH int) string {
+	arrow := "▾"
+	if m.collapsed[s] {
+		arrow = "▸"
+	}
+	left := fmt.Sprintf(" %s %d %s", arrow, int(s)+1, sectionNames[s])
+	var right string
+	switch s {
+	case secDetail:
+		right = m.detailHeaderInfo(bodyH)
+	case secTickets:
+		left += fmt.Sprintf(" (%d)", len(m.rows))
+		if m.filterText != "" {
+			right = "/" + m.filterText
+		}
+	case secSide:
+		left += fmt.Sprintf(" (%d)", len(m.snap.Side)+len(m.agentsSide))
+		if m.filterText != "" {
+			right = "/" + m.filterText
+		}
+	}
+	right += " "
+	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
+	if s == m.focus {
+		return sHeaderFocus.Render(left + strings.Repeat(" ", max(1, gap)) + right)
+	}
+	return sHeaderBlur.Render(left) + sFaint.Render(" "+strings.Repeat("─", max(0, gap-2))+" "+right)
+}
+
+func (m *Model) detailHeaderInfo(bodyH int) string {
+	var label string
+	switch m.sel.kind {
+	case selTicket:
+		label = m.tr.Ref(m.sel.id)
+	case selSide, selAgent:
+		label = m.sel.id
+	}
+	total := len(m.detailLines())
+	if bodyH > 0 && total > bodyH {
+		pct := 100 * (m.offset[secDetail] + bodyH) / total
+		label += fmt.Sprintf(" %d%%", min(100, pct))
+	}
+	if m.detailBusy {
+		label += " ⟳"
+	}
+	return label
+}
+
+// --- hint bar & overlays ---
+
+type hint struct{ key, label string }
+
+func renderHints(hs []hint) string {
+	parts := make([]string, len(hs))
+	for i, h := range hs {
+		parts[i] = sKey.Render(h.key) + " " + sMuted.Render(h.label)
+	}
+	return strings.Join(parts, sFaint.Render(" · "))
+}
+
+func (m *Model) viewHint() string {
+	if m.status != "" {
+		if m.statusErr {
+			return sWarn.Render("⚠ " + m.status)
+		}
+		return sOK.Render("✓ " + m.status)
+	}
+	switch m.mode {
+	case modeFilter:
+		return m.filter.View()
+	case modeOpenPick:
+		return renderHints([]hint{{"o/⏎", "prohlížeč"}, {"1-9", "obrázek"}, {"esc", "zpět"}})
+	case modeComment:
+		return renderHints([]hint{{"ctrl+s", "odeslat"}, {"esc", "zrušit"}})
+	case modeConfirm:
+		return renderHints([]hint{{"y", "odeslat"}, {"n", "upravit"}})
+	case modeHelp:
+		return sMuted.Render("libovolná klávesa zavře nápovědu")
+	}
+	if m.focus == secDetail {
+		return renderHints([]hint{{"j/k", "scroll"}, {"^d/^u", "půl str."}, {"o", "otevřít"}, {"c", "koment"}, {"tab", "sekce"}, {"?", "help"}})
+	}
+	hs := []hint{{"j/k", "pohyb"}, {"⏎", "detail"}, {"tab", "sekce"}, {"o", "otevřít"}, {"c", "koment"}}
+	return renderHints(append(hs, hint{"/", "filtr"}, hint{"?", "help"}))
+}
+
+var helpKeys = []hint{
+	{"j k ↓ ↑", "pohyb v seznamu / scroll detailu"},
+	{"g G", "začátek / konec"},
+	{"tab ⇧tab h l", "další / předchozí sekce"},
+	{"1 2 3", "Detail · Moje tickety · Bez ticketu"},
+	{"⏎ / klik", "otevřít položku v Detailu"},
+	{"^d ^u J K", "scroll Detailu (odkudkoli)"},
+	{"z mezera", "sbalit / rozbalit sekci"},
+	{"o", "otevřít v prohlížeči (v Detailu + číslo: obrázek)"},
+	{"y Y", "kopírovat URL / ID"},
+	{"c", "napsat komentář (ctrl+s, pak y)"},
+	{"r", "obnovit vše"},
+	{"/ esc", "filtr seznamů / zrušit filtr"},
+	{"kolečko", "scroll pod myší"},
+	{"q", "konec"},
+}
+
+var helpLegend = []string{
+	"🤖 pracuje subagent",
+	"🧪 připraveno k lokálnímu testu",
+	"📝 MR otevřený (✗ pipeline spadla)",
+	"🚀 nasazuje se na dev",
+	"✅ připraveno k testu na devu",
+	"⏸ nic se neděje, sloupec z boardu",
+	"⚑ priorita · ▶ otevřené v Detailu",
+}
+
+func (m *Model) viewHelp() []string {
+	w := m.width - 2
+	var b strings.Builder
+	b.WriteString(sTitle.Render("Klávesy") + "\n")
+	keyW := 13
+	for _, h := range helpKeys {
+		b.WriteString(sKey.Render(fmt.Sprintf("%-*s", keyW, h.key)) + sText.Render(h.label) + "\n")
+	}
+	b.WriteString("\n" + sTitle.Render("Legenda") + "\n")
+	for _, l := range helpLegend {
+		b.WriteString(sMuted.Render(l) + "\n")
+	}
+	box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(accent).Padding(0, 1).Width(w - 2)
+	return strings.Split(box.Render(strings.TrimRight(b.String(), "\n")), "\n")
+}
+
+func (m *Model) viewComment() []string {
+	ref := m.tr.Ref(m.commentFor)
+	title := ""
+	for _, r := range m.rows {
+		if r.Item.ID == m.commentFor {
+			title = r.Item.Title
+		}
+	}
+	if title == "" && m.detail != nil && m.detail.ID == m.commentFor {
+		title = m.detail.Title
+	}
+	lines := []string{
+		ticketStyle(m.commentFor).Bold(true).Render("✎ Komentář k " + ref + " " + title),
+		sMuted.Render("odejde jako @" + m.me.Username + " přes " + m.tr.Name()),
+		"",
+	}
+	lines = append(lines, strings.Split(m.comment.View(), "\n")...)
+	if m.mode == modeConfirm {
+		q := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(warn).Padding(0, 1).
+			Render(sBold.Render("Odeslat komentář k "+ref+"?") + "  " + sKey.Render("y") + sMuted.Render(" ano  ") + sKey.Render("n") + sMuted.Render(" ne"))
+		lines = append(append(lines, ""), strings.Split(q, "\n")...)
+	}
+	return lines
+}
+
+// detailImages lists the images of the current ticket detail.
+func (m *Model) detailImages() []tracker.Image {
+	if m.sel.kind != selTicket || m.detail == nil {
+		return nil
+	}
+	return m.detail.Images
+}
