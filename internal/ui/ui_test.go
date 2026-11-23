@@ -156,3 +156,12 @@ func TestWaterfill(t *testing.T) {
 		t.Errorf("got %v", got)
 	}
 }
+
+func TestMultiRuneKeyMsg_RunsEachKey(t *testing.T) {
+	m, _ := testModel(t)
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("1z")})
+	m = next.(Model)
+	if m.focus != secDetail || !m.collapsed[secDetail] {
+		t.Errorf("focus=%v collapsed=%v", m.focus, m.collapsed)
+	}
+}

@@ -208,6 +208,15 @@ func (m *Model) handleKey(k tea.KeyMsg) tea.Cmd {
 	if k.String() == "ctrl+c" {
 		return tea.Quit
 	}
+	// Fast typing (or tmux send-keys) can deliver several runes in one
+	// message, e.g. "1z". Outside text inputs each rune is its own command.
+	if k.Type == tea.KeyRunes && len(k.Runes) > 1 && !k.Paste && m.mode != modeFilter && m.mode != modeComment {
+		var cmds []tea.Cmd
+		for _, r := range k.Runes {
+			cmds = append(cmds, m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}}))
+		}
+		return tea.Batch(cmds...)
+	}
 	switch m.mode {
 	case modeHelp:
 		m.mode = modeNormal

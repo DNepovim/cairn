@@ -221,9 +221,14 @@ func (m *Model) markdown(md string, w int) []string {
 	out = refPattern.ReplaceAllStringFunc(out, func(ref string) string {
 		return ticketStyle(ref[1:]).Bold(true).Render(ref)
 	})
-	lines := strings.Split(out, "\n")
-	for i, l := range lines {
-		lines[i] = fit(strings.TrimRight(l, " "), w)
+	var lines []string
+	for _, l := range strings.Split(out, "\n") {
+		l = fit(strings.TrimRight(l, " "), w)
+		// glamour leaves double blank lines after code blocks; keep one
+		if ansi.Strip(l) == "" && len(lines) > 0 && ansi.Strip(lines[len(lines)-1]) == "" {
+			continue
+		}
+		lines = append(lines, l)
 	}
 	return lines
 }
