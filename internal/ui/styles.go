@@ -36,10 +36,6 @@ var (
 	sAuthor  = lipgloss.NewStyle().Foreground(lipgloss.Color("3")).Bold(true)
 	sTitle   = lipgloss.NewStyle().Foreground(accent).Bold(true)
 	sSelLine = lipgloss.NewStyle().Background(selectBg)
-
-	sHeaderFocus = lipgloss.NewStyle().Background(accent).Foreground(lipgloss.Color("#1c1c1c")).Bold(true)
-	sHeaderBlur  = lipgloss.NewStyle().Foreground(muted).Bold(true)
-	sGutterFocus = lipgloss.NewStyle().Foreground(accent)
 )
 
 // ticketColor gives every item one colour wherever it is drawn:

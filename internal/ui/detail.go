@@ -21,6 +21,9 @@ type renderCache struct {
 	key       string
 	lines     []string
 	renderers map[int]*glamour.TermRenderer // by wrap width
+	// links are long URLs shortened in the rendered text, by their "o N"
+	// number (numbered after the images).
+	links map[int]string
 }
 
 func (c *renderCache) renderer(w int) *glamour.TermRenderer {
@@ -54,6 +57,7 @@ func (m *Model) detailLines() []string {
 	if m.cache.key == key {
 		return m.cache.lines
 	}
+	m.cache.links = map[int]string{}
 	m.cache.lines = m.buildDetail(w)
 	m.cache.key = key
 	return m.cache.lines
@@ -152,7 +156,7 @@ func (m *Model) buildTicket(w int) []string {
 	if strings.TrimSpace(desc) == "" {
 		desc = "_(bez popisu)_"
 	}
-	add(m.markdown(desc, w)...)
+	add(m.markdown(m.shortenURLs(desc, w), w)...)
 
 	if len(d.Comments) > 0 {
 		add("", rule(fmt.Sprintf(" Komentáře (%d) ", len(d.Comments)), w))
@@ -163,7 +167,7 @@ func (m *Model) buildTicket(w int) []string {
 			at = c.At.Local().Format("2006-01-02 15:04")
 		}
 		add("", sAuthor.Render("@"+c.Author)+" "+sFaint.Render(at))
-		add(m.markdown(c.Body, w)...)
+		add(m.markdown(m.shortenURLs(c.Body, w), w)...)
 	}
 
 	if len(d.Images) > 0 {
@@ -201,6 +205,60 @@ func (m *Model) mentions(d *tracker.Detail) []string {
 
 func rule(label string, w int) string {
 	return sFaint.Render("──") + sMuted.Render(label) + sFaint.Render(strings.Repeat("─", max(0, w-2-lipgloss.Width(label))))
+}
+
+// urlPattern finds bare URLs in markdown.
+var urlPattern = regexp.MustCompile(`https?://[^\s<>()\[\]"'` + "`" + `]+`)
+
+// shortenURLs replaces bare URLs too long for one line with a shortened,
+// unbreakable form plus an "↗N" marker; "o N" opens the full URL. Without
+// this, a long URL is hard-wrapped at arbitrary characters.
+func (m *Model) shortenURLs(md string, w int) string {
+	limit := w - 2
+	locs := urlPattern.FindAllStringIndex(md, -1)
+	if len(locs) == 0 {
+		return md
+	}
+	var b strings.Builder
+	last := 0
+	for _, loc := range locs {
+		u := md[loc[0]:loc[1]]
+		// keep URLs that are a markdown link target "](…)" or "<…>", and short ones
+		before := md[max(0, loc[0]-2):loc[0]]
+		inFence := strings.Count(md[:loc[0]], "```")%2 == 1
+		if len(u) <= limit || inFence || strings.HasSuffix(before, "](") || strings.HasSuffix(before, "<") {
+			continue
+		}
+		n := m.nextLinkNumber()
+		m.cache.links[n] = u
+		marker := fmt.Sprintf(" ↗%d", n)
+		short := ShortURL(u, limit-lipgloss.Width(marker))
+		b.WriteString(md[last:loc[0]])
+		b.WriteString("`" + short + "` **" + strings.TrimSpace(marker) + "**")
+		last = loc[1]
+	}
+	b.WriteString(md[last:])
+	return b.String()
+}
+
+func (m *Model) nextLinkNumber() int {
+	n := len(m.cache.links) + 1
+	if m.detail != nil && m.sel.kind == selTicket {
+		n += len(m.detail.Images)
+	}
+	return n
+}
+
+// ShortURL drops the scheme and cuts the middle so the URL fits in w
+// columns: "claude.ai/design/p/5672…share".
+func ShortURL(u string, w int) string {
+	s := strings.TrimPrefix(strings.TrimPrefix(u, "https://"), "http://")
+	if len([]rune(s)) <= w || w < 8 {
+		return s
+	}
+	r := []rune(s)
+	tail := min(8, w/4)
+	return string(r[:w-tail-1]) + "…" + string(r[len(r)-tail:])
 }
 
 // refPattern finds "#681"-style references in already rendered (ANSI) text,
@@ -244,7 +302,7 @@ func (m *Model) buildSide(it bridge.SideItem, w int) []string {
 	}
 	if it.Note != "" {
 		out = append(out, "")
-		out = append(out, m.markdown(it.Note, w)...)
+		out = append(out, m.markdown(m.shortenURLs(it.Note, w), w)...)
 	}
 	if it.URL != "" {
 		out = append(out, "", sFaint.Render("o otevřít · ")+sMuted.Render(it.URL))

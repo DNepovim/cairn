@@ -118,6 +118,10 @@ type Model struct {
 	comment    textarea.Model
 	commentFor string // ticket id the draft belongs to
 
+	// navAt is when the user last moved a list cursor; a bridge "active"
+	// change won't yank the cursor within navGrace of it.
+	navAt time.Time
+
 	status    string
 	statusErr bool
 	statusID  int
@@ -129,10 +133,15 @@ type Options struct {
 	Exec func(name string, args ...string) error
 	// NoWatch skips the fsnotify watcher (tests).
 	NoWatch bool
+	// Now is the clock (tests); defaults to time.Now.
+	Now func() time.Time
 }
 
 // New builds the initial model.
 func New(cfg config.Config, tr tracker.Tracker, opts Options) Model {
+	if opts.Now == nil {
+		opts.Now = time.Now
+	}
 	if opts.Exec == nil {
 		opts.Exec = func(name string, args ...string) error { return exec.Command(name, args...).Start() }
 	}

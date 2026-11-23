@@ -13,7 +13,11 @@ import (
 	"github.com/dominikblaha/cairn/internal/workflow"
 )
 
-const headerHeight = 4 // title block + cairn art
+const (
+	headerLines  = 4               // info lines + cairn art inside the header panel
+	headerHeight = headerLines + 2 // plus its border
+	panelGap     = 1               // blank lines before each section panel
+)
 
 // entry is one selectable item of a list section.
 type entry struct {
@@ -200,7 +204,16 @@ func (m *Model) agentEntry(a bridge.Agent) entry {
 
 // --- layout ---
 
-func (m *Model) innerWidth() int { return max(10, m.width-2) }
+// innerWidth is the text width inside a panel: "│ " … " │" costs 4 columns.
+func (m *Model) innerWidth() int { return max(10, m.width-4) }
+
+// frameHeight is the rows a section's panel uses besides its body.
+func (m *Model) frameHeight(s section) int {
+	if m.collapsed[s] {
+		return 1 // a single title bar
+	}
+	return 2 // top + bottom border
+}
 
 // naturalHeight is how many body lines a section wants.
 func (m *Model) naturalHeight(s section) int {
@@ -222,7 +235,11 @@ func (m *Model) naturalHeight(s section) int {
 // the leftover goes to the big ones), and Detail takes whatever is left.
 func (m *Model) layout() [numSections]int {
 	var h [numSections]int
-	avail := max(0, m.height-headerHeight-1-int(numSections))
+	avail := m.height - headerHeight - 1 // hint bar
+	for s := section(0); s < numSections; s++ {
+		avail -= panelGap + m.frameHeight(s)
+	}
+	avail = max(0, avail)
 	var need [numSections]int
 	for s := section(0); s < numSections; s++ {
 		need[s] = m.naturalHeight(s)
@@ -281,7 +298,8 @@ func waterfill(avail int, needs []int) []int {
 	return out
 }
 
-// hit maps a screen row to (section, body line); line -1 is the section header.
+// hit maps a screen row to (section, body line); line -1 is the title bar,
+// -2 the bottom border.
 func (m *Model) hit(y int) (section, int, bool) {
 	if m.mode != modeNormal {
 		return 0, 0, false
@@ -289,14 +307,22 @@ func (m *Model) hit(y int) (section, int, bool) {
 	row := headerHeight
 	h := m.layout()
 	for s := section(0); s < numSections; s++ {
+		row += panelGap
 		if y == row {
 			return s, -1, true
 		}
 		row++
+		if m.collapsed[s] {
+			continue
+		}
 		if y < row+h[s] {
 			return s, y - row, true
 		}
 		row += h[s]
+		if y == row {
+			return s, -2, true
+		}
+		row++
 	}
 	return 0, 0, false
 }
@@ -311,9 +337,9 @@ func (m Model) View() string {
 	lines := m.viewHeader()
 	switch m.mode {
 	case modeHelp:
-		lines = append(lines, m.viewHelp()...)
+		lines = append(append(lines, ""), m.viewHelp()...)
 	case modeComment, modeConfirm:
-		lines = append(lines, m.viewComment()...)
+		lines = append(append(lines, ""), panel(sTitle.Render("✎ Komentář"), "", m.viewComment(), m.width, true)...)
 	default:
 		lines = append(lines, m.viewSections()...)
 	}
@@ -335,12 +361,12 @@ func fit(s string, w int) string {
 }
 
 func (m *Model) viewHeader() []string {
-	leftW := m.width - artWidth - 1
+	leftW := m.innerWidth() - artWidth - 1
 	project := m.cfg.Tracker.Project
 	if i := strings.LastIndex(project, "/"); i >= 0 {
 		project = project[i+1:]
 	}
-	l1 := sTitle.Render("cairn") + sFaint.Render(" · "+m.tr.Name()+" "+project)
+	l1 := sText.Render(project) + sFaint.Render(" · "+m.tr.Name())
 	l2 := sMuted.Render("připojuji…")
 	if m.me.Username != "" {
 		l2 = sMuted.Render("@" + m.me.Username)
@@ -376,37 +402,89 @@ func (m *Model) viewHeader() []string {
 		l4 = sMuted.Render(fmt.Sprintf("🤖 %d · bridge %s", running, m.snap.State.UpdatedAt.Local().Format("15:04")))
 	}
 	art := renderArt()
-	out := make([]string, headerHeight)
+	body := make([]string, headerLines)
 	for i, l := range []string{l1, l2, l3, l4} {
 		l = fit(l, leftW)
-		out[i] = l + strings.Repeat(" ", max(0, leftW-lipgloss.Width(l))) + " " + art[i]
+		body[i] = l + strings.Repeat(" ", max(0, leftW-lipgloss.Width(l))) + " " + art[i]
 	}
-	return out
+	return panel(sTitle.Render("cairn"), "", body, m.width, false)
 }
 
 func (m *Model) viewSections() []string {
 	h := m.layout()
 	var out []string
 	for s := section(0); s < numSections; s++ {
-		out = append(out, m.sectionHeader(s, h[s]))
-		if h[s] == 0 {
+		for i := 0; i < panelGap; i++ {
+			out = append(out, "")
+		}
+		title, right := m.sectionTitle(s, h[s])
+		focused := s == m.focus
+		if m.collapsed[s] {
+			out = append(out, titleBar(title, right, m.width, focused))
 			continue
 		}
 		body := m.sectionBody(s)
 		start := min(m.offset[s], max(0, len(body)-h[s]))
-		gutter := "  "
-		if s == m.focus {
-			gutter = sGutterFocus.Render("▎") + " "
-		}
-		for i := 0; i < h[s]; i++ {
-			line := ""
+		visible := make([]string, h[s])
+		for i := range visible {
 			if start+i < len(body) {
-				line = body[start+i]
+				visible[i] = body[start+i]
 			}
-			out = append(out, gutter+fit(line, m.innerWidth()))
 		}
+		out = append(out, panel(title, right, visible, m.width, focused)...)
 	}
 	return out
+}
+
+// borderStyle is the frame colour: accent when focused, dim grey otherwise.
+func borderStyle(focused bool) lipgloss.Style {
+	if focused {
+		return lipgloss.NewStyle().Foreground(accent)
+	}
+	return sFaint
+}
+
+// titleStyle styles a panel title according to focus.
+func titleStyle(focused bool) lipgloss.Style {
+	if focused {
+		return sTitle
+	}
+	return sMuted.Bold(true)
+}
+
+// panel draws a rounded box w columns wide with the title embedded in the
+// top border ("╭─ 2 Moje tickety ───── info ─╮") and body lines padded inside.
+func panel(title, right string, body []string, w int, focused bool) []string {
+	b := borderStyle(focused)
+	inner := w - 4
+	out := []string{topBorder(title, right, w, "╭", "╮", b)}
+	for _, l := range body {
+		l = fit(l, inner)
+		out = append(out, b.Render("│")+" "+l+strings.Repeat(" ", max(0, inner-lipgloss.Width(l)))+" "+b.Render("│"))
+	}
+	return append(out, b.Render("╰"+strings.Repeat("─", max(0, w-2))+"╯"))
+}
+
+// titleBar is a collapsed section: just its title in a one-line frame.
+func titleBar(title, right string, w int, focused bool) string {
+	return topBorder(title, right, w, "╶", "╴", borderStyle(focused))
+}
+
+func topBorder(title, right string, w int, l, r string, b lipgloss.Style) string {
+	head := b.Render(l+"─ ") + title + " "
+	tail := ""
+	if right != "" {
+		tail = " " + right + " "
+	}
+	tail += b.Render("─" + r)
+	fill := w - lipgloss.Width(head) - lipgloss.Width(tail)
+	if fill < 1 {
+		// too narrow for the info on the right: drop it
+		tail = b.Render("─" + r)
+		fill = max(0, w-lipgloss.Width(head)-lipgloss.Width(tail))
+		head = fit(head, w-lipgloss.Width(tail)-fill)
+	}
+	return head + b.Render(strings.Repeat("─", fill)) + tail
 }
 
 // sectionBody returns all lines of a section (scrolling happens in viewSections).
@@ -454,12 +532,13 @@ func (m *Model) emptyText(s section) string {
 	return sFaint.Render("Nic.")
 }
 
-func (m *Model) sectionHeader(s section, bodyH int) string {
+// sectionTitle returns the styled title and the right-hand info of a panel.
+func (m *Model) sectionTitle(s section, bodyH int) (string, string) {
 	arrow := "▾"
 	if m.collapsed[s] {
 		arrow = "▸"
 	}
-	left := fmt.Sprintf(" %s %d %s", arrow, int(s)+1, sectionNames[s])
+	left := fmt.Sprintf("%s %d %s", arrow, int(s)+1, sectionNames[s])
 	var right string
 	switch s {
 	case secDetail:
@@ -475,12 +554,11 @@ func (m *Model) sectionHeader(s section, bodyH int) string {
 			right = "/" + m.filterText
 		}
 	}
-	right += " "
-	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
-	if s == m.focus {
-		return sHeaderFocus.Render(left + strings.Repeat(" ", max(1, gap)) + right)
+	focused := s == m.focus
+	if right != "" {
+		right = titleStyle(focused).UnsetBold().Render(right)
 	}
-	return sHeaderBlur.Render(left) + sFaint.Render(" "+strings.Repeat("─", max(0, gap-2))+" "+right)
+	return titleStyle(focused).Render(left), right
 }
 
 func (m *Model) detailHeaderInfo(bodyH int) string {
@@ -525,7 +603,7 @@ func (m *Model) viewHint() string {
 	case modeFilter:
 		return m.filter.View()
 	case modeOpenPick:
-		return renderHints([]hint{{"o/⏎", "prohlížeč"}, {"1-9", "obrázek"}, {"esc", "zpět"}})
+		return renderHints([]hint{{"o/⏎", "prohlížeč"}, {"1-9", "obrázek/odkaz ↗"}, {"esc", "zpět"}})
 	case modeComment:
 		return renderHints([]hint{{"ctrl+s", "odeslat"}, {"esc", "zrušit"}})
 	case modeConfirm:
@@ -549,7 +627,7 @@ var helpKeys = []hint{
 	{"^d ^u J K", "scroll Detailu (odkudkoli)"},
 	{"z mezera", "sbalit / rozbalit sekci"},
 	{"o", "otevřít v prohlížeči"},
-	{"o 1…9", "v Detailu: otevřít obrázek N"},
+	{"o 1…9", "v Detailu: obrázek N / odkaz ↗N"},
 	{"y Y", "kopírovat URL / ID"},
 	{"c", "napsat komentář (ctrl+s, pak y)"},
 	{"r", "obnovit vše"},
@@ -569,7 +647,7 @@ var helpLegend = []string{
 }
 
 func (m *Model) viewHelp() []string {
-	w := m.width - 2
+	w := m.width
 	var b strings.Builder
 	b.WriteString(sTitle.Render("Klávesy") + "\n")
 	keyW := 13

@@ -18,7 +18,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		m.comment.SetWidth(max(10, m.width-4))
+		m.comment.SetWidth(max(10, m.width-6)) // inside a panel
 		m.comment.SetHeight(max(3, min(12, m.height/3)))
 		m.filter.Width = max(10, m.width-6)
 
@@ -152,25 +152,34 @@ func (m *Model) applyBridge(s bridge.Snapshot) tea.Cmd {
 		return nil
 	}
 	m.lastActive = key
+	// Follow the chat into Detail, but leave the list cursor alone while the
+	// user is navigating.
+	follow := m.opts.Now().Sub(m.navAt) > navGrace
 	switch a.Kind {
 	case "ticket":
-		return m.open(selection{selTicket, strings.TrimPrefix(a.ID, "#")})
+		return m.open(selection{selTicket, strings.TrimPrefix(a.ID, "#")}, follow)
 	case "side":
-		return m.open(selection{selSide, a.ID})
+		return m.open(selection{selSide, a.ID}, follow)
 	}
 	return nil
 }
 
-// open shows sel in Detail (and moves the matching list cursor to it).
-func (m *Model) open(sel selection) tea.Cmd {
+// navGrace is how long after a manual cursor move the bridge may not move it.
+const navGrace = 10 * time.Second
+
+func (m *Model) touched() { m.navAt = m.opts.Now() }
+
+// open shows sel in Detail; with moveCursor the matching list cursor follows.
+func (m *Model) open(sel selection, moveCursor bool) tea.Cmd {
 	if sel.kind == selNone {
 		return nil
 	}
 	m.collapsed[secDetail] = false
-	switch sel.kind {
-	case selTicket:
+	switch {
+	case !moveCursor:
+	case sel.kind == selTicket:
 		m.moveCursorTo(secTickets, sel)
-	case selSide, selAgent:
+	case sel.kind == selSide, sel.kind == selAgent:
 		m.moveCursorTo(secSide, sel)
 	}
 	if sel == m.sel {
@@ -258,7 +267,7 @@ func (m *Model) keyNormal(k tea.KeyMsg) tea.Cmd {
 		m.collapsed[m.focus] = false
 	case "enter":
 		if e, ok := m.current(); ok {
-			return m.open(e.sel)
+			return m.open(e.sel, true)
 		}
 	case "ctrl+d":
 		m.scrollDetail(max(3, m.bodyHeight(secDetail)/2))
@@ -271,7 +280,7 @@ func (m *Model) keyNormal(k tea.KeyMsg) tea.Cmd {
 	case "z", " ":
 		m.collapsed[m.focus] = !m.collapsed[m.focus]
 	case "o":
-		if m.focus == secDetail && len(m.detailImages()) > 0 {
+		if m.focus == secDetail && len(m.detailImages())+len(m.cache.links) > 0 {
 			m.mode = modeOpenPick
 			return nil
 		}
@@ -388,7 +397,10 @@ func (m *Model) keyOpenPick(k tea.KeyMsg) tea.Cmd {
 		if p, ok := m.images[n]; ok {
 			return m.openExternal(p)
 		}
-		return m.setStatus(fmt.Sprintf("obrázek %d není (zatím) stažený", n), true)
+		if u, ok := m.cache.links[n]; ok {
+			return m.openExternal(u)
+		}
+		return m.setStatus(fmt.Sprintf("%d: obrázek ještě není stažený / není takový odkaz", n), true)
 	}
 	return nil
 }
@@ -405,6 +417,7 @@ func (m *Model) move(d int) {
 		return
 	}
 	m.cursor[m.focus] += d
+	m.touched()
 	m.clamp(m.focus)
 	m.ensureVisible(m.focus)
 }
@@ -416,6 +429,7 @@ func (m *Model) moveTo(i int) {
 		return
 	}
 	m.cursor[m.focus] = i
+	m.touched()
 	m.clamp(m.focus)
 	m.ensureVisible(m.focus)
 }
@@ -491,6 +505,7 @@ func (m *Model) handleMouse(ev tea.MouseMsg) tea.Cmd {
 		} else {
 			// lists scroll by moving their cursor, so the selection stays visible
 			m.cursor[sec] += d
+			m.touched()
 			m.clamp(sec)
 			m.ensureVisible(sec)
 		}
@@ -500,7 +515,7 @@ func (m *Model) handleMouse(ev tea.MouseMsg) tea.Cmd {
 		}
 		m.focus = sec
 		if line < 0 || sec == secDetail {
-			if line < 0 {
+			if line == -1 {
 				m.collapsed[sec] = !m.collapsed[sec]
 			}
 			return nil
@@ -511,7 +526,8 @@ func (m *Model) handleMouse(ev tea.MouseMsg) tea.Cmd {
 			n := len(e.render(m.innerWidth(), i == m.cursor[sec]))
 			if y < n {
 				m.cursor[sec] = i
-				return m.open(e.sel)
+				m.touched()
+				return m.open(e.sel, true)
 			}
 			y -= n
 		}

@@ -5,6 +5,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/charmbracelet/lipgloss"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -13,6 +16,9 @@ import (
 	"github.com/dominikblaha/cairn/internal/tracker"
 	"github.com/dominikblaha/cairn/internal/tracker/fake"
 )
+
+// clock is the tests' fake time (Options.Now).
+var clock = time.Date(2026, 11, 23, 14, 0, 0, 0, time.UTC)
 
 func testModel(t *testing.T) (Model, *fake.Fake) {
 	t.Helper()
@@ -30,7 +36,7 @@ func testModel(t *testing.T) (Model, *fake.Fake) {
 		Items:   []tracker.Item{{ID: "681", Title: "Templates", Labels: []string{"Code review"}}, {ID: "700", Title: "Other"}},
 		Details: map[string]tracker.Detail{"681": {Item: tracker.Item{ID: "681", Title: "Templates"}, Description: "See #700"}},
 	})
-	m := New(cfg, fx, Options{NoWatch: true, Exec: func(string, ...string) error { return nil }})
+	m := New(cfg, fx, Options{NoWatch: true, Exec: func(string, ...string) error { return nil }, Now: func() time.Time { return clock }})
 	m = step(m, tea.WindowSizeMsg{Width: 60, Height: 40})
 	m = run(m, m.fetchBoard())
 	return m, fx
@@ -163,5 +169,66 @@ func TestMultiRuneKeyMsg_RunsEachKey(t *testing.T) {
 	m = next.(Model)
 	if m.focus != secDetail || !m.collapsed[secDetail] {
 		t.Errorf("focus=%v collapsed=%v", m.focus, m.collapsed)
+	}
+}
+
+func TestBridgeActive_DoesNotMoveCursorWhileNavigating(t *testing.T) {
+	m, _ := testModel(t)
+	m = press(m, "j")                    // user moves to #700
+	snap := bridge.Load(m.cfg.BridgeDir) // active = #681
+	m = step(m, bridgeMsg{snap: snap})
+	if m.sel.id != "681" {
+		t.Fatalf("Detail should follow the chat, sel = %+v", m.sel)
+	}
+	if e, _ := m.current(); e.sel.id != "700" {
+		t.Errorf("cursor moved to %q while navigating", e.sel.id)
+	}
+
+	// After the grace period the cursor follows again.
+	m.navAt = clock.Add(-navGrace - time.Second)
+	m.lastActive = ""
+	m = step(m, bridgeMsg{snap: snap})
+	if e, _ := m.current(); e.sel.id != "681" {
+		t.Errorf("cursor should follow after grace, at %q", e.sel.id)
+	}
+}
+
+func TestShortURL(t *testing.T) {
+	got := ShortURL("https://claude.ai/design/p/56727f30-596d-4aac-be32-5d1f43b83d86?file=x", 30)
+	if lipgloss.Width(got) != 30 || !strings.HasPrefix(got, "claude.ai/design/") || !strings.Contains(got, "…") {
+		t.Errorf("got %q (%d)", got, lipgloss.Width(got))
+	}
+}
+
+func TestLongURL_ShortenedAndOpenable(t *testing.T) {
+	m, _ := testModel(t)
+	long := "https://example.com/" + strings.Repeat("segment/", 12) + "end?x=1&y=2"
+	out := m.shortenURLs("see "+long+" now", 40)
+	if strings.Contains(out, long) || !strings.Contains(out, "↗1") || m.cache.links[1] != long {
+		t.Errorf("out = %q links = %v", out, m.cache.links)
+	}
+	short := "https://example.com/a"
+	if m.shortenURLs(short, 40) != short {
+		t.Error("short URLs stay")
+	}
+}
+
+func TestView_NeverOverflows(t *testing.T) {
+	for _, w := range []int{45, 52, 60, 80} {
+		m, _ := testModel(t)
+		m = step(m, tea.WindowSizeMsg{Width: w, Height: 45})
+		m = run(m, func() tea.Msg { return bridgeMsg{snap: bridge.Load(m.cfg.BridgeDir)} })
+		for _, keys := range [][]string{{}, {"2", "z"}, {"?"}} {
+			mm := press(m, keys...)
+			lines := strings.Split(mm.View(), "\n")
+			if len(lines) != 45 {
+				t.Errorf("w=%d keys=%v: %d lines", w, keys, len(lines))
+			}
+			for i, l := range lines {
+				if lipgloss.Width(l) > w {
+					t.Errorf("w=%d keys=%v line %d is %d wide: %q", w, keys, i, lipgloss.Width(l), l)
+				}
+			}
+		}
 	}
 }
