@@ -11,8 +11,9 @@ History and the reasons behind decisions: **docs/decisions.md**. What is next:
 - Owner: Dominik Bláha — React developer, new to Go. Explain Go idioms briefly
   when they matter (React/Redux analogies help: Bubble Tea = Elm architecture —
   `Model` ≈ state, `Update` ≈ reducer, `View` ≈ render, `tea.Cmd` ≈ effect).
-- Talk to him in **Czech**; code, comments, commits and README in **English**.
-  UI strings are Czech (`Moje tickety`, `Bez ticketu`, `Na tebe teď nic nečeká ✓`).
+- Reply in the language he writes in; code, comments, commits and README in
+  **English**. UI strings are currently Czech (`Moje tickety`, `Bez ticketu`,
+  `Na tebe teď nic nečeká ✓`).
 - Numbered proposals with one global numbering, so he can answer „1 ano, 3 ne“.
 - He wants to see changes running: after a UI change rebuild and restart his
   pane (see *Running and checking*), then tell him what to look at.
