@@ -1,0 +1,6 @@
+{
+  "name": "ticket-pane",
+  "version": "0.1.0",
+  "description": "Side pane with the CorpLifting GitLab ticket Claude is working on: labels, description, comments, MRs",
+  "types": "./types/index.d.ts"
+}

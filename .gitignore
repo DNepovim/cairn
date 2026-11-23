@@ -1,2 +1,3 @@
 bin/
 *.sent.log
+claude-plugin/*/.claude-plugin/types/

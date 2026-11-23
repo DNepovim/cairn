@@ -52,6 +52,15 @@ all its lines. Tints adapt to dark and light terminals.
 Each ticket keeps one colour everywhere (`palette[iid % 10]`, the same rule
 the Claude Code mod uses in the chat).
 
+## Repository
+
+- `CLAUDE.md` — working rules for Claude sessions on this repo
+- `docs/decisions.md` — why it looks and works the way it does
+- `docs/backlog.md` — what is next
+- `claude-plugin/ticket-pane/` — the Claude Code mod that writes the bridge,
+  colours/links ticket IDs in the chat and adds `/cairn` (to be packaged as the
+  cairn plugin, backlog 1)
+
 ## Install
 
 ```sh
